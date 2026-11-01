@@ -1,0 +1,34 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.phonekb'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'com.phonekb'
+        minSdk 28
+        targetSdk 36
+        versionCode 17
+        versionName '0.12.1'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+    }
+}
+
+// No dependencies: PhoneKB only uses the Android framework (Bluetooth HID, custom Views).

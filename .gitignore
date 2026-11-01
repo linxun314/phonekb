@@ -1,0 +1,21 @@
+# Build outputs
+/build/
+/app/build/
+.gradle/
+local.properties
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+
+# Local-only material (reference APKs, logs, screenshots, mockup scripts)
+/_local/
+/keys/
+
+# IDE
+.idea/
+*.iml
+*.hprof
+.DS_Store
+Thumbs.db

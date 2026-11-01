@@ -1,0 +1,5 @@
+// Root build file. Only the Android Gradle Plugin is needed: PhoneKB has no third-party
+// dependencies, it talks to the platform Bluetooth HID APIs directly.
+plugins {
+    id 'com.android.application' version '8.11.1' apply false
+}
