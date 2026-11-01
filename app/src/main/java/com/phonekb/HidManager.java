@@ -408,11 +408,50 @@ public final class HidManager {
 
     // ----------------------------------------------------------------- gamepad
 
+    /**
+     * Gamepad report: byte 0 = hat switch, bytes 1-2 = 16 buttons (little endian).
+     *
+     * <p>The pushed in-gamepad buttons are our logical {@code GP_*} mask. On the host side
+     * Linux numbers HID gamepad buttons 1-16 and maps them to BTN_GAMEPAD (A), BTN_EAST (B),
+     * BTN_C, BTN_NORTH (X), BTN_WEST (Y), BTN_Z, BTN_TL (L1), BTN_TR (R1), BTN_TL2, BTN_TR2,
+     * BTN_SELECT, BTN_START, so A/B/X/Y/L1/R1/SELECT/START must be sent as buttons
+     * 1/2/4/5/7/8/11/12. The d-pad must use the hat switch instead of buttons, otherwise every
+     * button lands four positions off on the host (A shows up as Y, the d-pad presses A/B/X, ...).
+     */
     public void sendGamepad(int buttons) {
         byte[] r = new byte[3];
-        r[0] = (byte) 0x0F; // hat switch = null
-        r[1] = (byte) (buttons & 0xFF);
-        r[2] = (byte) ((buttons >> 8) & 0xFF);
+        r[0] = (byte) hatFromButtons(buttons);
+        int mask = 0;
+        if ((buttons & HidConstants.GP_A) != 0) mask |= 0x0001;      // button 1  -> BTN_GAMEPAD (A)
+        if ((buttons & HidConstants.GP_B) != 0) mask |= 0x0002;      // button 2  -> BTN_EAST (B)
+        if ((buttons & HidConstants.GP_X) != 0) mask |= 0x0008;      // button 4  -> BTN_NORTH (X)
+        if ((buttons & HidConstants.GP_Y) != 0) mask |= 0x0010;      // button 5  -> BTN_WEST (Y)
+        if ((buttons & HidConstants.GP_L1) != 0) mask |= 0x0040;     // button 7  -> BTN_TL (L1)
+        if ((buttons & HidConstants.GP_R1) != 0) mask |= 0x0080;     // button 8  -> BTN_TR (R1)
+        if ((buttons & HidConstants.GP_SELECT) != 0) mask |= 0x0400; // button 11 -> BTN_SELECT
+        if ((buttons & HidConstants.GP_START) != 0) mask |= 0x0800;  // button 12 -> BTN_START
+        r[1] = (byte) (mask & 0xFF);
+        r[2] = (byte) ((mask >> 8) & 0xFF);
         send(HidConstants.REPORT_GAMEPAD, r);
+    }
+
+    /** Debug helper: sends a raw hat switch value (0-7, 0x0F = centred) with no buttons. */
+    public void sendGamepadHat(int hat) {
+        byte[] r = new byte[3];
+        r[0] = (byte) hat;
+        send(HidConstants.REPORT_GAMEPAD, r);
+    }
+
+    /** Converts the four logical d-pad bits into a HID hat switch value (0x0F = centred). */
+    private static int hatFromButtons(int buttons) {
+        int dx = ((buttons & HidConstants.GP_RIGHT) != 0 ? 1 : 0)
+                - ((buttons & HidConstants.GP_LEFT) != 0 ? 1 : 0);
+        int dy = ((buttons & HidConstants.GP_DOWN) != 0 ? 1 : 0)
+                - ((buttons & HidConstants.GP_UP) != 0 ? 1 : 0);
+        if (dx == 0 && dy == 0) return 0x0F;
+        if (dx == 0) return dy > 0 ? 4 : 0;
+        if (dy == 0) return dx > 0 ? 2 : 6;
+        if (dx > 0) return dy < 0 ? 1 : 3;
+        return dy > 0 ? 5 : 7;
     }
 }

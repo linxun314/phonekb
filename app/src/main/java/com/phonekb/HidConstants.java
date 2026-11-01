@@ -81,8 +81,12 @@ public final class HidConstants {
             "05 01 09 02 A1 01 85 03 09 01 A1 00 05 09 19 01 29 03 15 00 25 01 95 03" +
             "75 01 81 02 95 01 75 05 81 01 05 01 09 30 09 31 09 38 15 81 25 7F 75 08" +
             "95 03 81 06 C0 C0" +
-            // Gamepad: report id 4, hat switch + 16 buttons
-            "05 01 09 05 A1 01 85 04 15 00 25 08 35 00 46 3B 01 65 14 09 39 95 01 75 04" +
+            // Gamepad: report id 4, hat switch + 16 buttons.
+            // The hat switch uses the usual 8 positions 0-7 (logical max 7); 8 and above
+            // (we send 0x0F when centred) are the HID "null state" for a centred d-pad.
+            // A logical max of 8 makes some Linux/Android HID stacks shift every position
+            // by one, so the d-pad pressed up when right was intended.
+            "05 01 09 05 A1 01 85 04 15 00 25 07 35 00 46 3B 01 65 14 09 39 95 01 75 04" +
             "81 42 95 01 75 04 81 03 05 09 19 01 29 10 15 00 25 01 95 10 75 01 81 02 C0");
 
     private static byte[] hex(String s) {

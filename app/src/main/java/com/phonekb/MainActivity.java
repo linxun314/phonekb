@@ -254,7 +254,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         footer = new TextView(this);
-        footer.setText("PhoneKB v0.16.0 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手 · 伴侣 WiFi");
+        footer.setText("PhoneKB v0.16.1 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手 · 伴侣 WiFi");
         footer.setTextColor(Ui.TEXT_DIM);
         footer.setTextSize(11);
         footer.setGravity(Gravity.CENTER);
@@ -1360,6 +1360,64 @@ public class MainActivity extends Activity {
             getWindow().getDecorView().postDelayed(() -> {
                 if (chromeBar != null) chromeBar.showMoreMenuForDebug();
             }, 700);
+        }
+        // Debug/test hook: emit a fixed gamepad sequence so the host input events can be captured
+        // with "adb shell getevent" (adb cannot tap the on-screen gamepad).
+        int gpTest = intent.getIntExtra("gptest", 0);
+        if (gpTest > 0) {
+            new Thread(() -> runGamepadSelfTest(gpTest), "gamepad-self-test").start();
+        }
+    }
+
+    /** Debug only: presses every gamepad control once so a host-side getevent log can verify it. */
+    private void runGamepadSelfTest(int mode) {
+        HidManager manager = hid;
+        if (manager == null) return;
+        Thread self = Thread.currentThread();
+        sleepQuietly(1800);
+        int[] buttons = {HidConstants.GP_A, HidConstants.GP_B, HidConstants.GP_X, HidConstants.GP_Y,
+                HidConstants.GP_L1, HidConstants.GP_R1, HidConstants.GP_SELECT, HidConstants.GP_START};
+        int[] dirs = {HidConstants.GP_UP, HidConstants.GP_RIGHT, HidConstants.GP_DOWN, HidConstants.GP_LEFT};
+        if (mode == 1 || mode == 3) {
+            for (int b : buttons) {
+                if (self.isInterrupted()) return;
+                gamepadPulse(manager, b);
+            }
+        }
+        if (mode == 2 || mode == 3) {
+            for (int b : dirs) {
+                if (self.isInterrupted()) return;
+                gamepadPulse(manager, b);
+            }
+        }
+        if (mode == 4) {
+            gamepadPulse(manager, HidConstants.GP_UP | HidConstants.GP_RIGHT);
+            gamepadPulse(manager, HidConstants.GP_DOWN | HidConstants.GP_LEFT);
+        }
+        if (mode == 5) {
+            for (int hat = 0; hat <= 7; hat++) {
+                if (self.isInterrupted()) return;
+                manager.sendGamepadHat(hat);
+                sleepQuietly(400);
+                manager.sendGamepadHat(0x0F);
+                sleepQuietly(250);
+            }
+        }
+        manager.sendGamepad(0);
+    }
+
+    private static void gamepadPulse(HidManager manager, int mask) {
+        manager.sendGamepad(mask);
+        sleepQuietly(320);
+        manager.sendGamepad(0);
+        sleepQuietly(240);
+    }
+
+    private static void sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
