@@ -10,8 +10,8 @@ android {
         applicationId 'com.phonekb'
         minSdk 28
         targetSdk 36
-        versionCode 17
-        versionName '0.12.1'
+        versionCode 20
+        versionName '0.15.0'
     }
 
     buildTypes {
@@ -31,4 +31,7 @@ android {
     }
 }
 
-// No dependencies: PhoneKB only uses the Android framework (Bluetooth HID, custom Views).
+// zxing-core is bundled purely to render the pairing QR code in the companion page.
+dependencies {
+    implementation files('libs/zxing-core-3.5.3.jar')
+}

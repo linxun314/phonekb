@@ -1,0 +1,37 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.phonekb.companion'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'com.phonekb.companion'
+        minSdk 28
+        targetSdk 36
+        versionCode 3
+        versionName '0.3.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+    }
+}
+
+// zxing-core decodes the phone's pairing QR code (camera photo -> RGBLuminanceSource).
+dependencies {
+    implementation files('libs/zxing-core-3.5.3.jar')
+}

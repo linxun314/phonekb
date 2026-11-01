@@ -67,6 +67,7 @@ public class MainActivity extends Activity {
     private PowerButtonView powerButton;
     private TextView rotateButton;
     private TextView swapPill;
+    private TextView companionPill;
     private boolean twoHandSwapped;
 
     private final View[] pages = new View[TAB_NAMES.length];
@@ -207,7 +208,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         footer = new TextView(this);
-        footer.setText("PhoneKB v0.12.1 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手");
+        footer.setText("PhoneKB v0.13.0 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手 · 伴侣 WiFi");
         footer.setTextColor(Ui.TEXT_DIM);
         footer.setTextSize(11);
         footer.setGravity(Gravity.CENTER);
@@ -302,6 +303,12 @@ public class MainActivity extends Activity {
         rotateButton.setOnLongClickListener(v -> { resetOrientationToSystem(); return true; });
         bar.addView(rotateButton, chromePillLp(52));
 
+        companionPill = chromePill("伴侣");
+        companionPill.setTextColor(Ui.TEXT);
+        companionPill.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
+        companionPill.setOnClickListener(v -> openCompanion());
+        bar.addView(companionPill, chromePillLp(56));
+
         pairButton = chromePill("配对");
         pairButton.setTextColor(Ui.TEXT);
         pairButton.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
@@ -363,6 +370,15 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         rLp.setMarginEnd(dp(8));
         header.addView(rotateButton, rLp);
+
+        companionPill = plainText("伴侣", 13, Ui.TEXT_DIM);
+        companionPill.setPadding(dp(12), dp(8), dp(12), dp(8));
+        companionPill.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
+        companionPill.setOnClickListener(v -> openCompanion());
+        LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cLp.setMarginEnd(dp(8));
+        header.addView(companionPill, cLp);
 
         pairButton = plainText("配对", 13, Ui.TEXT_DIM);
         pairButton.setPadding(dp(14), dp(8), dp(14), dp(8));
@@ -1198,6 +1214,15 @@ public class MainActivity extends Activity {
         }
         if (intent.hasExtra("pair_dialog")) showPairingDialog();
         if (intent.hasExtra("help")) showHelpDialog();
+        // Debug/test hook: set the pairing token and/or open the WiFi companion page.
+        if (intent.hasExtra("ctoken")) {
+            String token = intent.getStringExtra("ctoken");
+            if (token != null && !token.isEmpty()) {
+                CompanionBridge.get(this).setToken(token);
+                CompanionBridge.get(this).start();
+            }
+        }
+        if (intent.hasExtra("companion")) contentFrame.post(this::openCompanion);
     }
 
     // ------------------------------------------------------------- immersive
@@ -1230,6 +1255,18 @@ public class MainActivity extends Activity {
     }
 
     // --------------------------------------------------------------- service
+
+    private void openCompanion() {
+        try {
+            // Forward our launch extras so debug/test hooks (e.g. pairjson) reach the
+            // companion page; CompanionActivity is not exported, so adb cannot start it.
+            Intent intent = new Intent(this, CompanionActivity.class);
+            if (getIntent() != null) intent.putExtras(getIntent());
+            startActivity(intent);
+        } catch (Exception e) {
+            toast("无法打开伴侣模式");
+        }
+    }
 
     private void startKeepAlive() {
         try {
