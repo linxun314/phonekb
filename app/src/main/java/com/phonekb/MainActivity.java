@@ -115,6 +115,14 @@ public class MainActivity extends Activity {
         }
     };
 
+    /** Debug-only override: pretend this display is narrower (adb --ei simw). */
+    private int simWidthDp;
+    /** Debug-only override: pretend the system font scale is different (adb --ef simfont). */
+    private float simFontScale;
+
+    /** Current adaptive toolbar (landscape compact bar or portrait header), for debug hooks. */
+    private ChromeBar chromeBar;
+
     private final Runnable retryIfError = new Runnable() {
         @Override
         public void run() {
@@ -125,6 +133,21 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // Adaptive UI: read the debug simulation extras before anything calls Ui.dp().
+        Intent launchIntent = getIntent();
+        simWidthDp = launchIntent != null ? launchIntent.getIntExtra("simw", 0) : 0;
+        simFontScale = launchIntent != null ? launchIntent.getFloatExtra("simfont", 0f) : 0f;
+        int uiSizeExtra = launchIntent != null ? launchIntent.getIntExtra("uisize", -1) : -1;
+        if (uiSizeExtra >= 0 && uiSizeExtra <= Ui.UI_SIZE_LARGE) {
+            Ui.writeManualMode(this, uiSizeExtra);
+        }
+        Ui.setSimulation(simWidthDp, simFontScale);
+        Ui.init(this);
+        // Draw edge-to-edge and let installInsetsPadding() turn the reported insets into
+        // padding. That is the only reliable way to be correct on notch/gesture-bar devices.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            getWindow().setDecorFitsSystemWindows(false);
+        }
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         getWindow().setStatusBarColor(Ui.BG);
         getWindow().setNavigationBarColor(Ui.BG);
@@ -152,13 +175,29 @@ public class MainActivity extends Activity {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (intent == null) return;
+        int newSimW = intent.getIntExtra("simw", simWidthDp);
+        float newSimF = intent.getFloatExtra("simfont", simFontScale);
+        boolean hasUiSize = intent.hasExtra("uisize");
+        if (hasUiSize) {
+            Ui.writeManualMode(this, intent.getIntExtra("uisize", Ui.readManualMode(this)));
+        }
         setIntent(intent);
+        if (hasUiSize || newSimW != simWidthDp
+                || Math.abs(newSimF - simFontScale) > 0.001f) {
+            // Metrics changed: rebuild every view from scratch so the new scale is applied
+            // everywhere (view sizes are baked in at construction time).
+            recreate();
+            return;
+        }
         applyIntentExtras(intent);
     }
 
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+        Ui.setSimulation(simWidthDp, simFontScale);
+        Ui.init(this);
         landscape = newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE;
         int keepOverlay = overlay;
         setContentView(buildUi());
@@ -172,6 +211,13 @@ public class MainActivity extends Activity {
     protected void onStart() {
         super.onStart();
         ensurePermission();
+    }
+
+    @Override
+    protected void onPause() {
+        // A floating overflow menu must not survive the activity going away (rotation, recreate, tablet switch).
+        if (chromeBar != null) chromeBar.dismissOverflow();
+        super.onPause();
     }
 
     @Override
@@ -208,7 +254,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         footer = new TextView(this);
-        footer.setText("PhoneKB v0.13.0 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手 · 伴侣 WiFi");
+        footer.setText("PhoneKB v0.16.0 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手 · 伴侣 WiFi");
         footer.setTextColor(Ui.TEXT_DIM);
         footer.setTextSize(11);
         footer.setGravity(Gravity.CENTER);
@@ -218,12 +264,71 @@ public class MainActivity extends Activity {
         footer.setVisibility(View.GONE);
         root.addView(footer, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // Window insets: instead of guessing status-bar heights, pad the real root view with
+        // whatever the system reports (cutouts, gesture bar, foldable hinge included). This
+        // keeps the layout correct on every device the app might be installed on.
+        installInsetsPadding(root);
+
+        // Narrow-screen simulation: run the exact same UI on a narrower, left-aligned strip
+        // of this display, so layout problems are reachable from adb without another phone.
+        int sim = Ui.simulatedWidthDp();
+        if (sim > 0 && sim < Ui.realWidthDp()) {
+            FrameLayout holder = new FrameLayout(this);
+            holder.setBackgroundColor(Ui.BG);
+            DisplayMetrics dm = getResources().getDisplayMetrics();
+            // In portrait the simulated window is exactly sim dp wide. In landscape the same
+            // device would be wider by its aspect ratio, so scale the width accordingly.
+            int designWidthDp = sim;
+            if (landscape) {
+                float realLandscapeDp = dm.widthPixels / Math.max(1f, dm.density);
+                designWidthDp = Math.round(sim * realLandscapeDp / Math.max(1f, Ui.realWidthDp()));
+            }
+            int simPx = Math.min(dm.widthPixels, Math.max(dp(240), Math.round(Ui.dp(this, designWidthDp))));
+            FrameLayout.LayoutParams holderLp = new FrameLayout.LayoutParams(
+                    simPx, ViewGroup.LayoutParams.MATCH_PARENT);
+            holderLp.gravity = Gravity.START | Gravity.TOP;
+            holder.addView(root, holderLp);
+            return holder;
+        }
         return root;
+    }
+
+    /** Pads {@code view} by the real system bar / cutout insets (API 30+ and legacy). */
+    private void installInsetsPadding(View view) {
+        if (view == null) return;
+        view.setOnApplyWindowInsetsListener((v, insets) -> {
+            int left;
+            int top;
+            int right;
+            int bottom;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                android.graphics.Insets cut = insets.getInsets(WindowInsets.Type.displayCutout());
+                android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
+                left = Math.max(cut.left, bars.left);
+                top = Math.max(cut.top, bars.top);
+                right = Math.max(cut.right, bars.right);
+                bottom = Math.max(cut.bottom, bars.bottom);
+            } else {
+                left = insets.getSystemWindowInsetLeft();
+                top = insets.getSystemWindowInsetTop();
+                right = insets.getSystemWindowInsetRight();
+                bottom = insets.getSystemWindowInsetBottom();
+            }
+            if (v.getPaddingLeft() != left || v.getPaddingTop() != top
+                    || v.getPaddingRight() != right || v.getPaddingBottom() != bottom) {
+                v.setPadding(left, top, right, bottom);
+            }
+            return insets;
+        });
+        view.requestApplyInsets();
     }
 
     private void buildChrome() {
         if (chrome == null) return;
+        if (chromeBar != null) chromeBar.dismissOverflow();
         chrome.removeAllViews();
+        chromeBar = null;
         if (landscape) buildCompactChrome();
         else {
             buildHeader();
@@ -247,10 +352,10 @@ public class MainActivity extends Activity {
     }
 
     private void buildCompactChrome() {
-        LinearLayout bar = new LinearLayout(this);
-        bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setGravity(Gravity.CENTER_VERTICAL);
+        ChromeBar bar = new ChromeBar(this);
         bar.setPadding(dp(10), dp(5), dp(10), dp(5));
+        bar.setMinTitleWidthDp(84);
+        chromeBar = bar;
         chrome.addView(bar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -258,10 +363,10 @@ public class MainActivity extends Activity {
         powerButton.setListener(() -> hid.tapConsumer(HidConstants.CONSUMER_POWER));
         LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(Ui.dpi(this, 54), Ui.dpi(this, 44));
         pLp.setMarginEnd(dp(10));
-        bar.addView(powerButton, pLp);
+        bar.addFixed(powerButton, pLp);
 
         statusDot = plainText("●", 12, Ui.WARN);
-        bar.addView(statusDot, new LinearLayout.LayoutParams(
+        bar.addFixed(statusDot, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         statusTitle = plainText("未连接", 14, Ui.TEXT);
@@ -273,54 +378,56 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         tLp.leftMargin = dp(7);
         tLp.rightMargin = dp(8);
-        bar.addView(statusTitle, tLp);
+        bar.addFixed(statusTitle, tLp);
 
         for (int i = 0; i < TAB_NAMES.length; i++) {
             final int index = i;
             TextView tab = chromePill(TAB_NAMES[i]);
             tab.setOnClickListener(v -> selectTab(index));
             tabs[i] = tab;
-            bar.addView(tab, chromePillLp(62));
+            bar.addFixed(tab, chromePillLp(62));
         }
 
         oneHandPill = chromePill("单手");
         oneHandPill.setOnClickListener(v -> toggleOneHand());
-        bar.addView(oneHandPill, chromePillLp(56));
+        bar.addCollapsible(oneHandPill, chromePillLp(56), "单手", this::toggleOneHand);
 
         handPill = chromePill("右手");
         handPill.setOnClickListener(v -> toggleHand());
-        bar.addView(handPill, chromePillLp(56));
+        bar.addCollapsible(handPill, chromePillLp(56),
+                () -> rightHanded ? "右手" : "左手", this::toggleHand);
 
         swapPill = chromePill("互换");
         swapPill.setOnClickListener(v -> toggleTwoHandSwap());
         swapPill.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
-        bar.addView(swapPill, chromePillLp(52));
+        bar.addCollapsible(swapPill, chromePillLp(52), "互换", this::toggleTwoHandSwap);
 
         rotateButton = chromePill("旋转");
         rotateButton.setTextColor(Ui.TEXT);
         rotateButton.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
         rotateButton.setOnClickListener(v -> toggleOrientation());
         rotateButton.setOnLongClickListener(v -> { resetOrientationToSystem(); return true; });
-        bar.addView(rotateButton, chromePillLp(52));
+        bar.addCollapsible(rotateButton, chromePillLp(52), "旋转", this::toggleOrientation);
 
         companionPill = chromePill("伴侣");
         companionPill.setTextColor(Ui.TEXT);
         companionPill.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
         companionPill.setOnClickListener(v -> openCompanion());
-        bar.addView(companionPill, chromePillLp(56));
+        bar.addCollapsible(companionPill, chromePillLp(56), "伴侣", this::openCompanion);
 
         pairButton = chromePill("配对");
         pairButton.setTextColor(Ui.TEXT);
         pairButton.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
         pairButton.setOnClickListener(v -> onPairClicked());
-        bar.addView(pairButton, chromePillLp(60));
+        bar.addCollapsible(pairButton, chromePillLp(60),
+                () -> hid != null && hid.isConnected() ? "帮助" : "配对", this::onPairClicked);
     }
 
     private void buildHeader() {
-        LinearLayout header = new LinearLayout(this);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(Gravity.CENTER_VERTICAL);
+        ChromeBar header = new ChromeBar(this);
         header.setPadding(dp(16), dp(10), dp(16), dp(4));
+        header.setMinTitleWidthDp(96);
+        chromeBar = header;
         chrome.addView(header, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -328,27 +435,30 @@ public class MainActivity extends Activity {
         powerButton.setListener(() -> hid.tapConsumer(HidConstants.CONSUMER_POWER));
         LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(Ui.dpi(this, 54), Ui.dpi(this, 48));
         pLp.setMarginEnd(dp(10));
-        header.addView(powerButton, pLp);
+        header.addFixed(powerButton, pLp);
 
         statusDot = plainText("●", 13, Ui.WARN);
-        header.addView(statusDot, new LinearLayout.LayoutParams(
+        header.addFixed(statusDot, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         LinearLayout texts = new LinearLayout(this);
         texts.setOrientation(LinearLayout.VERTICAL);
         texts.setPadding(dp(8), 0, 0, 0);
-        header.addView(texts, new LinearLayout.LayoutParams(0,
+        header.addFixed(texts, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         statusTitle = plainText("未连接", 16, Ui.TEXT);
         statusTitle.setGravity(Gravity.START);
+        statusTitle.setSingleLine(true);
+        statusTitle.setEllipsize(TextUtils.TruncateAt.END);
         statusTitle.setOnClickListener(v -> retryIfError.run());
         texts.addView(statusTitle, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         statusDetail = plainText("", 12, Ui.TEXT_DIM);
         statusDetail.setGravity(Gravity.START);
-        statusDetail.setMaxLines(2);
+        statusDetail.setSingleLine(true);
+        statusDetail.setEllipsize(TextUtils.TruncateAt.END);
         texts.addView(statusDetail, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -359,7 +469,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams swLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         swLp.setMarginEnd(dp(8));
-        header.addView(swapPill, swLp);
+        header.addCollapsible(swapPill, swLp, "互换", this::toggleTwoHandSwap);
 
         rotateButton = plainText("旋转", 13, Ui.TEXT_DIM);
         rotateButton.setPadding(dp(12), dp(8), dp(12), dp(8));
@@ -369,7 +479,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         rLp.setMarginEnd(dp(8));
-        header.addView(rotateButton, rLp);
+        header.addCollapsible(rotateButton, rLp, "旋转", this::toggleOrientation);
 
         companionPill = plainText("伴侣", 13, Ui.TEXT_DIM);
         companionPill.setPadding(dp(12), dp(8), dp(12), dp(8));
@@ -378,14 +488,15 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         cLp.setMarginEnd(dp(8));
-        header.addView(companionPill, cLp);
+        header.addCollapsible(companionPill, cLp, "伴侣", this::openCompanion);
 
         pairButton = plainText("配对", 13, Ui.TEXT_DIM);
         pairButton.setPadding(dp(14), dp(8), dp(14), dp(8));
         pairButton.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
         pairButton.setOnClickListener(v -> onPairClicked());
-        header.addView(pairButton, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        header.addCollapsible(pairButton, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT),
+                () -> hid != null && hid.isConnected() ? "帮助" : "配对", this::onPairClicked);
     }
 
     private void buildPortraitTabBar() {
@@ -422,6 +533,7 @@ public class MainActivity extends Activity {
     private TextView chromePill(String label) {
         TextView tv = plainText(label, 13, Ui.TEXT_DIM);
         tv.setSingleLine(true);
+        Ui.autoSize(tv, 13, 9);
         return tv;
     }
 
@@ -435,6 +547,7 @@ public class MainActivity extends Activity {
         TextView tv = plainText(label, 13, Ui.TEXT_DIM);
         tv.setSingleLine(true);
         tv.setGravity(Gravity.CENTER);
+        Ui.autoSize(tv, 13, 9);
         return tv;
     }
 
@@ -1098,10 +1211,27 @@ public class MainActivity extends Activity {
                         + "单手模式：右侧（或左侧）面板集中了大触控区和常用键；点「键盘」切成拇指键盘，点「切到遥控台」切回。\n\n"
                         + "竖屏：键盘页上半部分是触控区、下半部分是贴底的键盘（按键大小和普通手机键盘接近）；中间的分隔条可以上下拖动调整两区比例（拖到 48% / 58% / 62% 附近会吸附，双击分隔条恢复默认 58/42）。触控板页和媒体页的功能区也贴着屏幕底部，顶部分隔条可以拖动调整功能区高度（上方留空方便拇指操作，双击分隔条恢复默认：触控板页 80% / 媒体页 78%）；媒体页顶部还有「触控板」键，可以直接弹出触控板浮层。数字键盘 / 键盘 / 触控板的浮层都从屏幕底部弹出。\n\n"
                         + "横屏会自动切换紧凑工具栏和全屏显示。顶部最右侧的「旋转」键可以随时手动切换横竖屏（切过去后会一直保持，直到再点一次；长按「旋转」恢复跟随系统自动旋转）；同一栏最左边的电源键要按住 0.6 秒才发送，避免误触。\n\n"
+                        + "界面大小：「自动」会按屏幕宽度和系统字体大小自动适配，换手机或平板不用重新设置；如果按钮文字被截断或界面太挤，可以点下面的「界面大小」选「小」或「标准」。顶部一栏放不下时，右侧会出现「更多」按钮，单手 / 右手 / 互换 / 旋转 / 伴侣 / 帮助会按屏幕宽度自动收进菜单。\n\n"
                         + "中文输入：蓝牙键盘只能发送字母和按键，中文需要平板自己的输入法；需要直接打中文时请等后续的 WiFi 配套应用。\n\n"
                         + "配对：点右上角「配对」让手机可被发现，然后在平板上搜索并配对。\n\n"
                         + "如果平板上所有按键都突然没反应（App 更新后常见）：平板会缓存旧的蓝牙 HID 描述。请到平板 设置 → 蓝牙，找到本机设备 → 点右侧详情 →「取消配对 / 忘记设备」，然后回到 App 点「配对」重新配一次，之后所有功能恢复。")
                 .setPositiveButton("知道了", null)
+                .setNeutralButton("界面大小", (dialog, which) -> showUiSizeDialog())
+                .show();
+    }
+
+    /** Auto / small / standard / large UI scale; changing it recreates the activity. */
+    private void showUiSizeDialog() {
+        String[] items = {"自动适配（推荐）", "小（界面更紧凑）", "标准", "大（界面更宽松）"};
+        int current = Math.max(0, Math.min(items.length - 1, Ui.readManualMode(this)));
+        new AlertDialog.Builder(this)
+                .setTitle("界面大小")
+                .setSingleChoiceItems(items, current, (dialog, which) -> {
+                    Ui.writeManualMode(this, which);
+                    dialog.dismiss();
+                    recreate();
+                })
+                .setNegativeButton("取消", null)
                 .show();
     }
 
@@ -1214,6 +1344,7 @@ public class MainActivity extends Activity {
         }
         if (intent.hasExtra("pair_dialog")) showPairingDialog();
         if (intent.hasExtra("help")) showHelpDialog();
+        if (intent.getIntExtra("uisizedlg", 0) == 1) contentFrame.post(this::showUiSizeDialog);
         // Debug/test hook: set the pairing token and/or open the WiFi companion page.
         if (intent.hasExtra("ctoken")) {
             String token = intent.getStringExtra("ctoken");
@@ -1223,6 +1354,13 @@ public class MainActivity extends Activity {
             }
         }
         if (intent.hasExtra("companion")) contentFrame.post(this::openCompanion);
+        // Debug/test hook: open the adaptive-toolbar overflow menu so it can be screenshotted.
+        if (intent.getIntExtra("moremenu", 0) == 1) {
+            // The decor view survives recreation, so the callback survives an orientation change.
+            getWindow().getDecorView().postDelayed(() -> {
+                if (chromeBar != null) chromeBar.showMoreMenuForDebug();
+            }, 700);
+        }
     }
 
     // ------------------------------------------------------------- immersive

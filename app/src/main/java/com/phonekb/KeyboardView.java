@@ -528,8 +528,8 @@ public class KeyboardView extends View {
         float subOffset = Ui.dp(getContext(), 9);
         for (Key k : toolbar) {
             if (k.type == TYPE_LABEL) {
-                Ui.textCenter(canvas, "当前：" + layoutLabel(), k.rect.centerX(),
-                        k.rect.centerY(), chipLabelPaint);
+                drawFitted(canvas, "当前：" + layoutLabel(), k.rect.centerX(), k.rect.centerY(),
+                        chipLabelPaint, k.rect.width() - Ui.dp(getContext(), 6));
                 continue;
             }
             boolean flash = k == flashChip;
@@ -538,26 +538,32 @@ public class KeyboardView extends View {
             if (k.type == TYPE_ACTION && !flash) {
                 canvas.drawRoundRect(k.rect, toolbarRadius, toolbarRadius, actionChipStrokePaint);
             }
+            float maxW = k.rect.width() - Ui.dp(getContext(), 6);
             if (k.type == TYPE_TOGGLE) {
                 if (toolbarWide) {
-                    Ui.textCenter(canvas, k.label, k.rect.centerX(), k.rect.centerY(), toolbarPaint);
+                    drawFitted(canvas, k.label, k.rect.centerX(), k.rect.centerY(),
+                            toolbarPaint, maxW);
                 } else {
-                    Ui.textCenter(canvas, k.label, k.rect.centerX(), k.rect.centerY() - subOffset, toolbarPaint);
-                    Ui.textCenter(canvas, "当前：" + layoutLabel(), k.rect.centerX(),
-                            k.rect.centerY() + subOffset, chipLabelPaint);
+                    drawFitted(canvas, k.label, k.rect.centerX(), k.rect.centerY() - subOffset,
+                            toolbarPaint, maxW);
+                    drawFitted(canvas, "当前：" + layoutLabel(), k.rect.centerX(),
+                            k.rect.centerY() + subOffset, chipLabelPaint, maxW);
                 }
             } else {
-                Ui.textCenter(canvas, k.label, k.rect.centerX(), k.rect.centerY(),
-                        flash ? chipFlashLabelPaint : actionChipLabelPaint);
+                drawFitted(canvas, k.label, k.rect.centerX(), k.rect.centerY(),
+                        flash ? chipFlashLabelPaint : actionChipLabelPaint, maxW);
             }
         }
         for (Key k : chips) {
             boolean flash = k == flashChip;
             canvas.drawRoundRect(k.rect, radius, radius, flash ? chipFlashPaint : chipPaint);
-            Ui.textCenter(canvas, k.label, k.rect.centerX(), k.rect.centerY(),
-                    flash ? chipFlashLabelPaint : chipLabelPaint);
+            drawFitted(canvas, k.label, k.rect.centerX(), k.rect.centerY(),
+                    flash ? chipFlashLabelPaint : chipLabelPaint,
+                    k.rect.width() - Ui.dp(getContext(), 4));
         }
         float baseSize = labelPaint.getTextSize();
+        float darkBase = darkLabelPaint.getTextSize();
+        float minKeyLabel = Ui.dp(getContext(), 7);
         for (Key k : keys) {
             boolean latched = k.type == TYPE_MOD && (latchMods & k.modBit) != 0;
             boolean pressed = k == activeKey;
@@ -567,9 +573,20 @@ public class KeyboardView extends View {
             int len = k.label.length();
             if (len == 2) labelPaint.setTextSize(Ui.dp(getContext(), 15));
             else if (len > 2) labelPaint.setTextSize(Ui.dp(getContext(), 13));
+            Ui.fitText(text, k.label, k.rect.width() - Ui.dp(getContext(), 5), minKeyLabel);
             Ui.textCenter(canvas, k.label, k.rect.centerX(), k.rect.centerY(), text);
+            if (text != labelPaint) text.setTextSize(darkBase);
             labelPaint.setTextSize(baseSize);
         }
+    }
+
+    /** Draws centered text, shrinking the paint when the label is wider than {@code maxWidth}. */
+    private void drawFitted(Canvas canvas, String label, float cx, float cy, Paint paint,
+            float maxWidth) {
+        float size = paint.getTextSize();
+        Ui.fitText(paint, label, maxWidth, Math.max(Ui.dp(getContext(), 7), size * 0.55f));
+        Ui.textCenter(canvas, label, cx, cy, paint);
+        paint.setTextSize(size);
     }
 
     private Key hit(float x, float y) {

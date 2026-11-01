@@ -21,6 +21,7 @@ PhoneKB 是一个纯 Android 端实现的开源小工具：手机作为 **Blueto
 - **双手模式**：触控区 + 按键板左右分工，可一键「互换」对调
 - **单手模式**：拇指遥控台 / 拇指键盘，左右手可切换
 - **横竖屏自适应**：横屏紧凑工具栏 + 沉浸全屏；顶部「旋转」键可强制横/竖屏（长按恢复跟随系统）
+- **自适应界面**：按屏幕宽度和系统字体自动缩放；顶部一栏放不下时自动收进「更多」菜单；帮助 →「界面大小」可选 自动 / 小 / 标准 / 大
 - **比例可调**：键盘页（触控区/键盘）、触控板页与媒体页（功能区/留空区）均可拖动调节并记忆
 - **WiFi 伴侣（可选）**：平板装一次 PhoneKB 伴侣 → 中文直接写入平板输入框、剪贴板双向同步（平板复制的文字自动回到手机）；手机与平板**扫码配对**，也支持手动 IP / 配对码
 - **稳定连接**：前台服务保活，HID 断连自动重新注册，内置配对与排错帮助
@@ -50,12 +51,17 @@ PhoneKB 是一个纯 Android 端实现的开源小工具：手机作为 **Blueto
 |---|
 | ![伴侣](docs/screenshots/17-wifi-companion-phone.png) |
 
+| 自适应 · 竖屏 | 窄屏「更多」菜单 | 窄屏横屏 | 界面大小 |
+|---|---|---|---|
+| ![自适应](docs/screenshots/18-adaptive-portrait.png) | ![更多菜单](docs/screenshots/19-adaptive-overflow-portrait.png) | ![窄屏横屏](docs/screenshots/20-adaptive-overflow-landscape.png) | ![界面大小](docs/screenshots/21-ui-size-dialog.png) |
+
 更多截图见 [docs/screenshots/](docs/screenshots/)。
 
 ## 兼容性
 
 - **手机端**：Android 9（API 28）及以上，且系统保留 **Bluetooth HID Device profile**。
   少数厂商 ROM 会屏蔽该 profile（只能当主机，不能当外设）；App 内会检测注册状态并给出提示。
+- **界面适配**：以 393dp 宽度为基准自动缩放，约 320–480dp 的手机/分屏宽度、以及系统大字体（约 0.85–1.3 倍）下都可正常使用；顶部一栏放不下时自动折叠到「更多」。
 - **被控端**：任何支持蓝牙键盘/鼠标的设备——Android 平板/手机、Windows、macOS、Linux、iPadOS（后两者未实测）。
   蓝牙 HID 不需要 root，不需要被控端安装软件。
 - **WiFi 伴侣（可选）**：被控端为 Android 9（API 28）及以上平板，安装伴侣 APK 并开启无障碍服务；手机与平板在同一 WiFi（也可以用手机热点）。
