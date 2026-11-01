@@ -83,6 +83,8 @@ powershell -ExecutionPolicy Bypass -File tools/build.ps1 -Clean -VersionName 0.1
 
 仓库自带 `.github/workflows/build.yml`，push / Pull Request 时自动用 Gradle 构建 debug APK 并上传为构建产物（Artifacts），也可在 Actions 页手动触发。
 
+发布到 GitHub 的详细步骤见 [docs/发布指南.md](docs/发布指南.md)（建仓库、推送、打 tag、上传 APK）。
+
 ## 项目结构
 
 ```
