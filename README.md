@@ -100,7 +100,7 @@ PhoneKB 是一个纯 Android 端实现的开源小工具：手机作为 **Blueto
 一次构建两个模块，产物：
 
 - 手机端：`app/build/outputs/apk/debug/app-debug.apk`
-- 平板伴侣：`companion/build/outputs/apk/debug/app-debug.apk`
+- 平板伴侣：`companion/build/outputs/apk/debug/companion-debug.apk`
 
 要求 JDK 17+、Android SDK Platform 36、Build-Tools 36.x；首次构建会自动下载 Gradle 与 AGP。
 用 Android Studio 直接 `File → Open` 本目录即可运行。
