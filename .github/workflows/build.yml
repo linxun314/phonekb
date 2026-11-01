@@ -20,12 +20,27 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
+      # 运行器自带 Android SDK，不再用 android-actions/setup-android@v3
+      # （该 action 在新版镜像上会因 sdkmanager 找不到 tools 包而失败）。
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        run: |
+          set -e
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          SDKM="$(ls -d "$SDK_ROOT"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -n 1 || true)"
+          if [ -z "$SDKM" ]; then SDKM="$(command -v sdkmanager)"; fi
+          echo "using sdkmanager: $SDKM"
+          yes | "$SDKM" --licenses > /dev/null 2>&1 || true
+          # 预装/联网安装；失败也不影响，Gradle 构建时会自动补装缺失组件
+          "$SDKM" "platform-tools" "platforms;android-36" "build-tools;36.1.0" || true
 
       - name: Build with Gradle
-        run: sh ./gradlew --no-daemon assembleDebug
+        run: |
+          chmod +x gradlew || true
+          sh ./gradlew --no-daemon assembleDebug
 
       - name: Upload phone APK
         uses: actions/upload-artifact@v4
