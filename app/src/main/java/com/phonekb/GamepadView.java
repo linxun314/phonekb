@@ -124,8 +124,8 @@ public final class GamepadView extends View {
     // v0.23: on-demand touch pad overlay - a floating panel on the right that the thumb can reach
     // without letting go of the phone, opened from the 「触控板」 chip in the top-right corner.
     private static final long HOLD_LONG_PRESS_MS = 260;
-    private static final float TP_PANEL_W_LAND_DP = 360f;
-    private static final float TP_PANEL_H_LAND_DP = 313f;
+    private static final float TP_PANEL_W_LAND_DP = 392f;
+    private static final float TP_PANEL_H_LAND_DP = 420f;
     private static final float TP_PANEL_W_PORT_DP = 232f;
     private static final float TP_PANEL_H_PORT_DP = 400f;
     private final RectF tpChipRect = new RectF();
@@ -531,21 +531,30 @@ public final class GamepadView extends View {
             for (int i = 0; i < 3; i++) tpNavRects[i].setEmpty();
             return;
         }
-        float pw = landscapeLayout ? Math.min(dp(TP_PANEL_W_LAND_DP), w * 0.42f)
+        float pw = landscapeLayout ? Math.min(dp(TP_PANEL_W_LAND_DP), w * 0.46f)
                 : Math.min(dp(TP_PANEL_W_PORT_DP), w * 0.60f);
-        float ph = landscapeLayout ? Math.min(dp(TP_PANEL_H_LAND_DP), h - dp(150))
+        float ph = landscapeLayout ? Math.min(dp(TP_PANEL_H_LAND_DP), h - dp(10))
                 : Math.min(dp(TP_PANEL_H_PORT_DP), h * 0.55f);
-        // Landscape keeps ~112 dp free on the right so the ABXY cluster stays visible next to it;
+        // Landscape keeps ~130 dp free on the right so the ABXY cluster stays visible next to it;
         // portrait keeps the pad narrow enough that the left thumb still owns the d-pad.
-        float panelRight = w - dp(landscapeLayout ? 128f : 40f) - dp(tpOffsetDp);
+        float panelRight = w - dp(landscapeLayout ? 130f : 40f) - dp(tpOffsetDp);
         panelRight = Math.min(panelRight, w - dp(8));
         panelRight = Math.max(panelRight, dp(8) + pw);
         float panelLeft = panelRight - pw;
-        // Landscape: start below the touch-pad chip so the toggle never hides behind its own panel.
-        float panelTop = landscapeLayout ? Math.max(shoulderTop + sh + dp(14), tpChipRect.bottom + dp(12))
-                : (h - dp(66) - ph);
-        panelTop = Math.max(dp(56), Math.min(panelTop, h - dp(10) - ph));
+        // Landscape: the pad sits right under the shoulder row (L1/SELECT/START/R1) and runs almost to
+        // the bottom edge, which is what makes it feel like a real controller panel. Only when the user
+        // drags it so far right that it would swallow its own toggle chip do we start below the chip.
+        // Landscape: the pad is a full-height column on the right (level with the shoulder row and
+        // running down to the bottom edge), which is what makes it read as a controller panel. The
+        // ABXY cluster stays visible to its right, the d-pad to its left.
+        float panelTop = landscapeLayout ? dp(0) : (h - dp(66) - ph);
+        panelTop = Math.max(dp(0), Math.min(panelTop, h - dp(6) - ph));
         tpPanelRect.set(panelLeft, panelTop, panelRight, panelTop + ph);
+        android.util.Log.i("PhoneKB-TP", "overlay dp: left=" + Math.round(panelLeft / unit)
+                + " right=" + Math.round(panelRight / unit)
+                + " top=" + Math.round(panelTop / unit)
+                + " bottom=" + Math.round((panelTop + ph) / unit)
+                + " wDp=" + Math.round(wDp) + " hDp=" + Math.round(hDp));
 
         tpHandleRect.set(panelLeft + dp(10), panelTop + dp(10),
                 panelLeft + dp(32), panelTop + dp(32));
