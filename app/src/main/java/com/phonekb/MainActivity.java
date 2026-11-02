@@ -255,7 +255,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         footer = new TextView(this);
-        footer.setText("PhoneKB v0.20.0 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手 · 伴侣 WiFi");
+        footer.setText("PhoneKB v0.20.1 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手 · 伴侣 WiFi");
         footer.setTextColor(Ui.TEXT_DIM);
         footer.setTextSize(11);
         footer.setGravity(Gravity.CENTER);
@@ -1386,6 +1386,9 @@ public class MainActivity extends Activity {
             float both = intent.getIntExtra("gpsize", 100) / 100f;
             gamepadView.setPadScale(both);
             gamepadView.setBtnScale(both);
+        }
+        if (gamepadView != null && intent.hasExtra("gpcompat")) {
+            gamepadView.setHatCompat(intent.getIntExtra("gpcompat", 0) == 1);
         }
         if (gamepadView != null && intent.getIntExtra("gpdialog", 0) == 1) {
             contentFrame.postDelayed(gamepadView::showSettingsDialog, 700);

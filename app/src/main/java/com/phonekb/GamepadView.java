@@ -100,6 +100,7 @@ public final class GamepadView extends View {
     private int padType;
     private float padScale;
     private float btnScale;
+    private boolean hatCompat;
     private int discHat = HAT_NEUTRAL;
     private int discPointer = -1;
     private boolean landscapeLayout;
@@ -114,6 +115,8 @@ public final class GamepadView extends View {
         padType = prefs.getInt("gp_pad_type", PAD_BUTTONS);
         padScale = clampScale(prefs.getFloat("gp_pad_scale", SCALE_DEFAULT));
         btnScale = clampScale(prefs.getFloat("gp_btn_scale", SCALE_DEFAULT));
+        hatCompat = prefs.getBoolean("gp_hat_compat", false);
+        if (hid != null) hid.setHatCompat(hatCompat);
         labelPaint = Ui.text(c, 20, Ui.TEXT);
         smallPaint = Ui.text(c, 12, Ui.TEXT);
         chipPaint = Ui.text(c, 11, Ui.TEXT);
@@ -142,6 +145,24 @@ public final class GamepadView extends View {
 
     public int getPadType() {
         return padType;
+    }
+
+    /**
+     * Compatibility switch for hosts that still decode the d-pad with the descriptor cached from an
+     * older pairing (every direction lands one position counter-clockwise). Enabling it makes the
+     * d-pad send pre-compensated hat values so the host lands on the intended direction; the only
+     * casualty is the up-left diagonal, which such hosts cannot represent.
+     */
+    public boolean isHatCompat() {
+        return hatCompat;
+    }
+
+    public void setHatCompat(boolean enabled) {
+        hatCompat = enabled;
+        prefs.edit().putBoolean("gp_hat_compat", enabled).apply();
+        if (hid != null) hid.setHatCompat(enabled);
+        resetInput();
+        invalidate();
     }
 
     public void setPadType(int type) {
@@ -643,6 +664,7 @@ public final class GamepadView extends View {
         final int originalType = padType;
         final float originalPadScale = padScale;
         final float originalBtnScale = btnScale;
+        final boolean originalCompat = hatCompat;
 
         LinearLayout box = new LinearLayout(ctx);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -684,8 +706,26 @@ public final class GamepadView extends View {
         box.addView(settingsLabel(ctx, "按键大小（ABXY / 肩键 / 菜单键）"), btnLp);
         box.addView(sliderRow(ctx, btnScale, this::setBtnScale));
 
+        LinearLayout.LayoutParams compatLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        compatLp.topMargin = dpi(14);
+        box.addView(settingsLabel(ctx, "方向键方向"), compatLp);
+
+        final boolean[] compatHolder = {hatCompat};
+        LinearLayout compatRow = segment(ctx, new String[]{"正常", "修正一格"}, hatCompat ? 1 : 0, which -> {
+            compatHolder[0] = which == 1;
+            setHatCompat(compatHolder[0]);
+        });
+        LinearLayout.LayoutParams compatRowLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        compatRowLp.gravity = Gravity.END;
+        compatRowLp.topMargin = dpi(6);
+        box.addView(compatRow, compatRowLp);
+
         TextView hint = new TextView(ctx);
-        hint.setText("只缩放按键本身，不改变页面布局；圆盘：按住并滑动选择方向，松手回中");
+        hint.setText("只缩放按键本身，不改变页面布局；圆盘：按住并滑动选择方向，松手回中\n" +
+                "方向键按左却出下 / 方向整体偏一格：多是平板缓存了旧的蓝牙描述，重新配对可根治；" +
+                "暂时不想重配就把这里改成「修正一格」（左上斜向会退化成左）");
         hint.setTextColor(Ui.TEXT_DIM);
         hint.setTextSize(11);
         LinearLayout.LayoutParams hintLp = new LinearLayout.LayoutParams(
@@ -709,6 +749,7 @@ public final class GamepadView extends View {
             setPadType(originalType);
             setPadScale(originalPadScale);
             setBtnScale(originalBtnScale);
+            setHatCompat(originalCompat);
             dialog.dismiss();
         });
         TextView save = new TextView(ctx);
@@ -721,6 +762,7 @@ public final class GamepadView extends View {
         save.setBackground(Ui.rounded(ctx, Ui.ACCENT, 18));
         save.setOnClickListener(v -> {
             setPadType(typeHolder[0]);
+            setHatCompat(compatHolder[0]);
             dialog.dismiss();
         });
         LinearLayout.LayoutParams cancelLp = new LinearLayout.LayoutParams(

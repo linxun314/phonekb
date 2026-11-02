@@ -429,11 +429,35 @@ public final class HidManager {
      */
     public void sendGamepadWithHat(int buttons, int hat) {
         byte[] r = new byte[3];
-        r[0] = (byte) (hat & 0x0F);
+        r[0] = (byte) (encodeHat(hat) & 0x0F);
         int mask = buttonMask(buttons);
         r[1] = (byte) (mask & 0xFF);
         r[2] = (byte) ((mask >> 8) & 0xFF);
         send(HidConstants.REPORT_GAMEPAD, r);
+    }
+
+    /**
+     * Hosts cache the HID report descriptor from the moment a device is paired. Tablets that were
+     * first paired with an older build (hat logical max 8 instead of 7) keep decoding every hat
+     * value as floor(7v/8), i.e. one position counter-clockwise - pressing "left" produces
+     * "down-left". Re-pairing fixes it, but for hosts that were not re-paired this compatibility
+     * mode pre-compensates the value so the host lands on the intended sector.
+     */
+    private static final int[] HAT_COMPAT = {0, 2, 3, 4, 5, 6, 7, 7};
+
+    private boolean hatCompat;
+
+    public void setHatCompat(boolean enabled) {
+        hatCompat = enabled;
+    }
+
+    public boolean isHatCompat() {
+        return hatCompat;
+    }
+
+    private int encodeHat(int hat) {
+        if (!hatCompat || hat < 0 || hat > 7) return hat;
+        return HAT_COMPAT[hat];
     }
 
     private static int buttonMask(int buttons) {
