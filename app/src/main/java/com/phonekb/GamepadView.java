@@ -52,7 +52,7 @@ public final class GamepadView extends View {
     /** Gamepad page layout: floating keys (default) or the full-body controller skin. */
     public static final int LAYOUT_FLOAT = 0;
     public static final int LAYOUT_SKIN = 1;
-    private static final long EDIT_PRESS_MS = 600;
+    private static final long EDIT_PRESS_MS = 3000;
 
     /** Gamepad page touch-pad placement: off / one visible panel in the middle / the whole empty area. */
     public static final int TOUCH_OFF = 0;
