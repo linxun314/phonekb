@@ -63,6 +63,17 @@ public class MediaView extends View {
     private final float pad;
     private int pressedBar = -1;
 
+    private final RectF[] brightAreas = {new RectF(), new RectF()};
+    private static final int BRIGHT_DOWN = 0;
+    private static final int BRIGHT_UP = 1;
+    private static final int[] BRIGHT_USAGES = {
+            HidConstants.CONSUMER_BRIGHTNESS_DECREMENT,
+            HidConstants.CONSUMER_BRIGHTNESS_INCREMENT};
+    private final Paint sunPaint;
+    private final float brightRowHeight;
+    private boolean landscapeLayout;
+    private int pressedBright = -1;
+
     private final RectF toolpadRect = new RectF();
     private final Paint toolpadOutline;
     private final Paint toolpadText;
@@ -80,6 +91,8 @@ public class MediaView extends View {
         labelPaint = Ui.text(context, 24, Ui.TEXT);
         labelDimPaint = Ui.text(context, 24, Ui.TEXT_DIM);
         toolpadHeight = Ui.dp(context, 44);
+        brightRowHeight = Ui.dp(context, 40);
+        sunPaint = Ui.fill(Ui.TEXT);
         toolpadOutline = new Paint(Paint.ANTI_ALIAS_FLAG);
         toolpadOutline.setStyle(Paint.Style.STROKE);
         toolpadOutline.setColor(Ui.ACCENT);
@@ -126,9 +139,27 @@ public class MediaView extends View {
 
         float mediaH = Math.max(Ui.dp(getContext(), 72), (bottom - contentTop) * 0.26f);
         mediaH = Math.min(mediaH, Ui.dp(getContext(), 140));
-        mediaCard.set(left, contentTop, right, contentTop + mediaH);
 
-        float keypadTop = mediaCard.bottom + gap;
+        // Brightness keys: landscape puts them left/right of the media bar (no extra row),
+        // portrait puts them on their own row under the media bar.
+        landscapeLayout = (right - left) > (bottom - top) * 1.2f;
+        float keysTop;
+        if (landscapeLayout) {
+            float bw = Math.min(Math.max(Ui.dp(getContext(), 88), (right - left) * 0.105f), (right - left) * 0.16f);
+            brightAreas[0].set(left, contentTop, left + bw, contentTop + mediaH);
+            brightAreas[1].set(right - bw, contentTop, right, contentTop + mediaH);
+            mediaCard.set(left + bw + gap, contentTop, right - bw - gap, contentTop + mediaH);
+            keysTop = mediaCard.bottom;
+        } else {
+            mediaCard.set(left, contentTop, right, contentTop + mediaH);
+            float rowTop = mediaCard.bottom + gap;
+            float half = (right - left - gap) / 2f;
+            brightAreas[0].set(left, rowTop, left + half, rowTop + brightRowHeight);
+            brightAreas[1].set(left + half + gap, rowTop, right, rowTop + brightRowHeight);
+            keysTop = brightAreas[0].bottom;
+        }
+
+        float keypadTop = keysTop + gap;
         keypadCard.set(left, keypadTop, right, bottom);
 
         // media bar: three touch areas with 24 / 40 / 24 weights inside an inset card
@@ -188,6 +219,9 @@ public class MediaView extends View {
             Icons.draw(canvas, BAR_ICONS[i], box, icon);
         }
 
+        drawBrightness(canvas, brightAreas[BRIGHT_DOWN], false, pressedBright == BRIGHT_DOWN);
+        drawBrightness(canvas, brightAreas[BRIGHT_UP], true, pressedBright == BRIGHT_UP);
+
         for (Key key : keys) {
             float radius = Math.min(key.rect.width(), key.rect.height()) * 0.46f;
             float cx = key.rect.centerX();
@@ -203,6 +237,56 @@ public class MediaView extends View {
                 text.setTextSize(textSize);
                 canvas.drawText(key.label, cx, cy - (text.ascent() + text.descent()) / 2f, text);
             }
+        }
+    }
+
+    private void drawBrightness(Canvas canvas, RectF area, boolean up, boolean pressedState) {
+        if (area.width() <= 0f || area.height() <= 0f) return;
+        float h = area.height();
+        float radius = Math.min(Ui.dp(getContext(), 16), h / 2f);
+        canvas.drawRoundRect(area, radius, radius, pressedState ? pressPaint : keyPaint);
+        Paint icon = hid.isConnected() ? iconPaint : iconDimPaint;
+        boolean stacked = area.width() < Ui.dp(getContext(), 150);
+        float sunR = stacked ? h * 0.15f : h * 0.20f;
+        float sunX;
+        float sunY;
+        float textX;
+        float textY;
+        float textSize;
+        if (stacked) {
+            sunX = area.centerX();
+            sunY = area.top + h * 0.34f;
+            textX = area.centerX();
+            textY = area.top + h * 0.76f;
+            textSize = h * 0.24f;
+        } else {
+            sunX = area.left + h * 0.55f;
+            sunY = area.centerY();
+            textX = area.centerX() + h * 0.30f;
+            textY = area.centerY();
+            textSize = h * 0.32f;
+        }
+        drawSun(canvas, sunX, sunY, sunR, icon);
+        Paint text = hid.isConnected() ? labelPaint : labelDimPaint;
+        text.setTextSize(textSize);
+        canvas.drawText(up ? "亮度 ＋" : "亮度 −", textX,
+                textY - (text.ascent() + text.descent()) / 2f, text);
+    }
+
+    private void drawSun(Canvas canvas, float cx, float cy, float r, Paint paint) {
+        float stroke = Math.max(Ui.dp(getContext(), 1.2f), r * 0.20f);
+        Paint ray = new Paint(paint);
+        ray.setStyle(Paint.Style.STROKE);
+        ray.setStrokeWidth(stroke);
+        ray.setStrokeCap(Paint.Cap.ROUND);
+        canvas.drawCircle(cx, cy, r * 0.62f, ray);
+        float outer = r * 1.28f;
+        for (int i = 0; i < 8; i++) {
+            double angle = Math.PI * i / 4.0;
+            float dx = (float) Math.cos(angle);
+            float dy = (float) Math.sin(angle);
+            canvas.drawLine(cx + dx * r * 0.92f, cy + dy * r * 0.92f,
+                    cx + dx * outer, cy + dy * outer, ray);
         }
     }
 
@@ -229,6 +313,15 @@ public class MediaView extends View {
                     if (touchpadAction != null) touchpadAction.run();
                     invalidate();
                     return true;
+                }
+                for (int i = 0; i < 2; i++) {
+                    if (brightAreas[i].contains(x, y)) {
+                        pressedBright = i;
+                        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                        hid.tapConsumer(BRIGHT_USAGES[i]);
+                        invalidate();
+                        return true;
+                    }
                 }
                 for (int i = 0; i < 3; i++) {
                     if (barAreas[i].contains(x, y)) {
@@ -261,6 +354,7 @@ public class MediaView extends View {
             case MotionEvent.ACTION_UP: {
                 pressed.remove(e.getPointerId(e.getActionIndex()));
                 pressedBar = -1;
+                pressedBright = -1;
                 pressedToolpad = false;
                 invalidate();
                 return true;
@@ -273,6 +367,7 @@ public class MediaView extends View {
             case MotionEvent.ACTION_CANCEL: {
                 pressed.clear();
                 pressedBar = -1;
+                pressedBright = -1;
                 pressedToolpad = false;
                 invalidate();
                 return true;

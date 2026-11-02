@@ -13,6 +13,8 @@ local.properties
 # Local-only material (reference APKs, logs, screenshots, mockup scripts)
 /_local/
 /keys/
+# Dev screenshots and mockup renders live in the workspace root, not in the repo
+/*.png
 
 # IDE
 .idea/

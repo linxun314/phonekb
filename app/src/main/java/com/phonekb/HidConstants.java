@@ -54,6 +54,9 @@ public final class HidConstants {
     public static final int CONSUMER_CHANNEL_UP = 0x009C;
     public static final int CONSUMER_CHANNEL_DOWN = 0x009D;
     public static final int CONSUMER_CLOSED_CAPTION = 0x0173;
+    /** Screen brightness, Display Brightness increment / decrement (Consumer page). */
+    public static final int CONSUMER_BRIGHTNESS_INCREMENT = 0x006F;
+    public static final int CONSUMER_BRIGHTNESS_DECREMENT = 0x0070;
     public static final int CONSUMER_AC_HOME = 0x0223;
     public static final int CONSUMER_AC_BACK = 0x0224;
     public static final int CONSUMER_AC_REFRESH = 0x0227;

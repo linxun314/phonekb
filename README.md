@@ -26,7 +26,7 @@
 | 用手机给平板打字、按快捷键 | 手机注册成**标准蓝牙键盘**，平板把它当普通蓝牙键盘用，**平板不装 App** |
 | 用手机当鼠标 | 触控板 + 物理左/中/右键，支持点击、拖动、双指滚动、右键菜单 |
 | 躺床上刷视频、切歌、调音量 | 媒体页：上一首 / 播放暂停 / 下一首 / 音量 ± / 静音 / CC / 返回主页菜单电源 |
-| 手机当手柄玩模拟器 | 手柄页：移动盘（十字键 / 圆盘可切换，大小可调）+ XYAB + L1/R1 + SELECT/START |
+| 手机当手柄玩模拟器 | 手柄页：手机式浮键布局，移动盘（十字键 / 圆盘可切换）+ XYAB + L1/R1 + SELECT/START，移动盘与按键大小可分别无级调节 |
 | 平板打中文（HID 的天然短板） | 可选 **WiFi 伴侣**：手机上输入中文 → 直接写进平板当前输入框 |
 | 手机复制、平板粘贴 | 可选 **WiFi 伴侣**：剪贴板双向同步 |
 
@@ -40,7 +40,7 @@
 - **键盘**：手机布局 / 电脑布局两套，含符号页、Ctrl+C/V/X/A、Alt+Tab、方向键
 - **触控板**：单指移动 · 点击左键 · 双指滚动 · 双指点击右键 · 三指中键；物理左/中/右键可长按拖动；一键弹出浮层数字键盘 / 浮层键盘
 - **媒体键**：媒体条 + 音量 / 静音 / CC / 频道 ±、返回 / 主页 / 菜单 / 电源
-- **游戏手柄**：移动盘（十字键 / 圆盘两种形态，大小 34%–52% 无级可调并记忆）、X/Y/A/B、L1/R1、SELECT/START，支持多指同时按
+- **游戏手柄**：手机式浮键布局（左下移动盘、右下 X/Y/A/B、两侧 L1/R1、顶部 SELECT/START，中间留空不挡画面），移动盘可切十字键 / 圆盘两种形态，移动盘与按键大小各有 60%–150% 无级滑块并记忆，支持多指同时按
 - **双手模式**：左侧触控区 + 右侧按键板，一键「互换」左右/上下位置
 - **单手模式**：拇指遥控台 / 拇指键盘，左右手可切换，适合单手握持手机
 - **横竖屏自适应**：横屏紧凑工具栏 + 沉浸全屏；顶部「旋转」键强制横/竖屏（长按恢复跟随系统）
@@ -187,7 +187,7 @@ PhoneKB 不传输画面，只把手机当外设，所以延迟低、被控端干
 ### 命令行（不装 Android Studio，Windows）
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools/build.ps1 -Clean -Module app -VersionName 0.17.0 -VersionCode 23
+powershell -ExecutionPolicy Bypass -File tools/build.ps1 -Clean -Module app -VersionName 0.19.0 -VersionCode 25
 powershell -ExecutionPolicy Bypass -File tools/build.ps1 -Clean -Module companion -VersionName 0.3.0 -VersionCode 3
 ```
 

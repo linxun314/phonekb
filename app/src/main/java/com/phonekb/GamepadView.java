@@ -25,11 +25,14 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Gamepad page: left movement pad card, right ABXY diamond with L1/R1 and select/start.
+ * Gamepad page, floating "handheld console" layout (PPSSPP / Dolphin style): the movement pad
+ * sits in the bottom-left thumb zone, ABXY in the bottom-right, L1/R1 float at the sides and
+ * SELECT/START sit in the middle below them. The middle of the page stays empty, so nothing is
+ * drawn over the game picture when the tablet mirrors it.
  *
- * <p>The movement pad has two shapes: four direction buttons (the original look) or a round disc
- * that is held and slid (8 directions, including diagonals). The pad width is a continuous share
- * of the page width, adjusted from the 「移动盘」 button in the left card's top-left corner.
+ * <p>The movement pad has two shapes: four direction buttons or a round disc that is held and
+ * slid (8 directions including diagonals). Both clusters are scaled by their own continuous
+ * size factor (60%-150%), adjusted from the 「移动盘」 chip in the top-left corner.
  */
 public final class GamepadView extends View {
     public static final int PAD_BUTTONS = 0;
@@ -39,9 +42,11 @@ public final class GamepadView extends View {
     private static final int KIND_FACE = 1;
     private static final int KIND_PILL = 2;
 
-    private static final float SHARE_MIN = 0.34f;
-    private static final float SHARE_MAX = 0.52f;
-    private static final float SHARE_DEFAULT = 0.42f;
+    private static final float SCALE_MIN = 0.60f;
+    private static final float SCALE_MAX = 1.50f;
+    private static final float SCALE_DEFAULT = 1.00f;
+    private static final int SCALE_STEPS = 90;
+
     private static final int HAT_NEUTRAL = 0x0F;
     private static final String[] DIR_NAMES = {"上", "右上", "右", "右下", "下", "左下", "左", "左上"};
 
@@ -53,6 +58,7 @@ public final class GamepadView extends View {
         final String label;
         int fill;
         boolean pressed;
+        float radius;
 
         Btn(int bit, int kind, String label, int fill, int labelColor) {
             this.bit = bit;
@@ -65,7 +71,6 @@ public final class GamepadView extends View {
 
     private final HidManager hid;
     private final SharedPreferences prefs;
-    private final Paint cardPaint = Ui.fill(Ui.SURFACE);
     private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint iconPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint labelPaint;
@@ -77,34 +82,38 @@ public final class GamepadView extends View {
     private final Btn down = new Btn(HidConstants.GP_DOWN, KIND_DPAD, "", Ui.KEY, Ui.TEXT);
     private final Btn left = new Btn(HidConstants.GP_LEFT, KIND_DPAD, "", Ui.KEY, Ui.TEXT);
     private final Btn right = new Btn(HidConstants.GP_RIGHT, KIND_DPAD, "", Ui.KEY, Ui.TEXT);
-    private final Btn l1 = new Btn(HidConstants.GP_L1, KIND_PILL, "L1", Ui.SURFACE_2, Ui.TEXT);
-    private final Btn r1 = new Btn(HidConstants.GP_R1, KIND_PILL, "R1", Ui.SURFACE_2, Ui.TEXT);
+    private final Btn l1 = new Btn(HidConstants.GP_L1, KIND_PILL, "L1", Ui.KEY, Ui.TEXT);
+    private final Btn r1 = new Btn(HidConstants.GP_R1, KIND_PILL, "R1", Ui.KEY, Ui.TEXT);
     private final Btn x = new Btn(HidConstants.GP_X, KIND_FACE, "X", 0xFF22405F, Ui.TEXT);
     private final Btn y = new Btn(HidConstants.GP_Y, KIND_FACE, "Y", 0xFF5A4716, Ui.TEXT);
     private final Btn a = new Btn(HidConstants.GP_A, KIND_FACE, "A", 0xFF1F5136, Ui.TEXT);
     private final Btn b = new Btn(HidConstants.GP_B, KIND_FACE, "B", 0xFF5B262B, Ui.TEXT);
-    private final Btn select = new Btn(HidConstants.GP_SELECT, KIND_PILL, "SELECT", Ui.SURFACE_2, Ui.TEXT);
-    private final Btn start = new Btn(HidConstants.GP_START, KIND_PILL, "START", Ui.SURFACE_2, Ui.TEXT);
+    private final Btn select = new Btn(HidConstants.GP_SELECT, KIND_PILL, "SELECT", Ui.KEY, Ui.TEXT);
+    private final Btn start = new Btn(HidConstants.GP_START, KIND_PILL, "START", Ui.KEY, Ui.TEXT);
 
     private final Btn[] all = {up, down, left, right, l1, r1, x, y, a, b, select, start};
     private final Map<Integer, Btn> pointers = new HashMap<>();
     private int mask;
-    private final RectF leftCard = new RectF();
-    private final RectF rightCard = new RectF();
     private final RectF chipRect = new RectF();
     private final RectF discRect = new RectF();
 
     private int padType;
-    private float padShare;
+    private float padScale;
+    private float btnScale;
     private int discHat = HAT_NEUTRAL;
     private int discPointer = -1;
+    private boolean landscapeLayout;
+    private float padCx;
+    private float padCy;
+    private float padHalf;
 
     public GamepadView(Context c, HidManager hid) {
         super(c);
         this.hid = hid;
         this.prefs = c.getSharedPreferences("phonekb", Context.MODE_PRIVATE);
         padType = prefs.getInt("gp_pad_type", PAD_BUTTONS);
-        padShare = clampShare(prefs.getFloat("gp_pad_share", SHARE_DEFAULT));
+        padScale = clampScale(prefs.getFloat("gp_pad_scale", SCALE_DEFAULT));
+        btnScale = clampScale(prefs.getFloat("gp_btn_scale", SCALE_DEFAULT));
         labelPaint = Ui.text(c, 20, Ui.TEXT);
         smallPaint = Ui.text(c, 12, Ui.TEXT);
         chipPaint = Ui.text(c, 11, Ui.TEXT);
@@ -125,8 +134,8 @@ public final class GamepadView extends View {
         return Math.round(Ui.dp(getContext(), v));
     }
 
-    private static float clampShare(float share) {
-        return Math.max(SHARE_MIN, Math.min(SHARE_MAX, share));
+    private static float clampScale(float scale) {
+        return Math.max(SCALE_MIN, Math.min(SCALE_MAX, scale));
     }
 
     // ------------------------------------------------------------- public API
@@ -144,15 +153,29 @@ public final class GamepadView extends View {
         invalidate();
     }
 
-    public float getPadShare() {
-        return padShare;
+    /** Size factor of the movement pad itself (0.6 - 1.5), independent of the page layout. */
+    public float getPadScale() {
+        return padScale;
     }
 
-    public void setPadShare(float share) {
-        float next = clampShare(share);
-        if (Math.abs(next - padShare) < 0.0005f) return;
-        padShare = next;
-        prefs.edit().putFloat("gp_pad_share", padShare).apply();
+    public void setPadScale(float scale) {
+        float next = clampScale(scale);
+        if (Math.abs(next - padScale) < 0.0005f) return;
+        padScale = next;
+        prefs.edit().putFloat("gp_pad_scale", padScale).apply();
+        invalidate();
+    }
+
+    /** Size factor of the action keys: ABXY, L1/R1 and SELECT/START (0.6 - 1.5). */
+    public float getBtnScale() {
+        return btnScale;
+    }
+
+    public void setBtnScale(float scale) {
+        float next = clampScale(scale);
+        if (Math.abs(next - btnScale) < 0.0005f) return;
+        btnScale = next;
+        prefs.edit().putFloat("gp_btn_scale", btnScale).apply();
         invalidate();
     }
 
@@ -170,58 +193,113 @@ public final class GamepadView extends View {
     // ---------------------------------------------------------------- layout
 
     private void layout() {
-        float pad = dp(10);
-        float gap = dp(10);
         float w = getWidth();
         float h = getHeight();
-        float leftW = (w - pad * 2 - gap) * padShare;
-        leftCard.set(pad, pad, pad + leftW, h - pad);
-        rightCard.set(leftCard.right + gap, pad, w - pad, h - pad);
-        chipRect.set(leftCard.left + dp(8), leftCard.top + dp(8),
-                leftCard.left + dp(8) + dp(74), leftCard.top + dp(8) + dp(28));
+        if (w <= 0f || h <= 0f) return;
+        landscapeLayout = w > h * 1.2f;
 
-        float cx = leftCard.centerX();
-        float cy = leftCard.centerY();
-        if (padType == PAD_DISC) {
-            float r = Math.min(leftCard.width() * 0.40f, leftCard.height() * 0.36f);
-            discRect.set(cx - r, cy - r, cx + r, cy + r);
-        } else {
-            // D-pad cross inside the left card.
-            float s = Math.min(leftCard.width() * 0.30f, leftCard.height() * 0.26f);
-            float d = s * 1.06f;
-            up.rect.set(cx - s / 2, cy - d - s / 2, cx + s / 2, cy - d + s / 2);
-            down.rect.set(cx - s / 2, cy + d - s / 2, cx + s / 2, cy + d + s / 2);
-            left.rect.set(cx - d - s / 2, cy - s / 2, cx - d + s / 2, cy + s / 2);
-            right.rect.set(cx + d - s / 2, cy - s / 2, cx + d + s / 2, cy + s / 2);
+        // All geometry is computed in dp space first, then converted back to pixels, because dp()
+        // already includes the UI layout scale (1.15 on wide screens) - mixing raw pixels and dp
+        // made the keys smaller than designed and pushed the landscape row off the bottom.
+        final float unit = dp(1f);
+        final float wDp = w / unit;
+        final float hDp = h / unit;
+        final float e = 16f;   // page edge margin (dp)
+        final float be = 14f;  // bottom edge margin (dp)
+
+        chipRect.set(dp(14), dp(10), dp(14) + dp(78), dp(10) + dp(27));
+
+        float padBaseDp = landscapeLayout ? Math.min(wDp * 0.0665f, 58f)
+                : Math.min(wDp * 0.1375f, 64f);
+        padBaseDp = Math.max(36f, padBaseDp);
+        float rBaseDp = landscapeLayout ? Math.min(wDp * 0.0335f, 31f)
+                : Math.min(wDp * 0.069f, 30f);
+        rBaseDp = Math.max(15f, rBaseDp);
+
+        // Both thumb clusters grow from the bottom corners, so a large size would push them into
+        // each other. Scale both down proportionally in that case instead of overlapping keys.
+        float ps = padScale;
+        float bs = btnScale;
+        float limitDp = wDp / 2f - e;
+        float spanDp = padBaseDp * 1.43f * ps + rBaseDp * 2.48f * bs;
+        if (spanDp > limitDp && spanDp > 0f) {
+            float f = limitDp / spanDp;
+            ps *= f;
+            bs *= f;
         }
 
-        // Right card: shoulder row, ABXY diamond, select/start row.
-        float innerPad = dp(12);
-        float shoulderH = dp(30);
-        float bottomH = dp(28);
-        float rowGap = dp(8);
-        float pillW = (rightCard.width() - innerPad * 2 - rowGap) / 2f;
-        float x0 = rightCard.left + innerPad;
-        float x1 = x0 + pillW;
-        float x2 = x1 + rowGap;
-        float top = rightCard.top + innerPad;
-        l1.rect.set(x0, top, x1, top + shoulderH);
-        r1.rect.set(x2, top, x2 + pillW, top + shoulderH);
-        float bottomY = rightCard.bottom - innerPad - bottomH;
-        select.rect.set(x0, bottomY, x1, bottomY + bottomH);
-        start.rect.set(x2, bottomY, x2 + pillW, bottomY + bottomH);
+        // --- movement pad (bottom-left thumb zone)
+        float s = padBaseDp * ps * unit;
+        float arm = s * 0.93f;
+        padHalf = arm + s / 2f;
+        padCx = dp(e) + padHalf;
+        padCy = h - dp(be) - padHalf;
 
-        float regionTop = l1.rect.bottom + rowGap;
-        float regionBottom = select.rect.top - rowGap;
-        float faceCy = (regionTop + regionBottom) / 2f;
-        float faceCx = rightCard.centerX();
-        float radius = Math.min(dp(26),
-                Math.min((regionBottom - regionTop) / 2.9f, rightCard.width() * 0.13f));
-        float offset = radius * 1.5f;
-        y.rect.set(faceCx - radius, faceCy - offset - radius, faceCx + radius, faceCy - offset + radius);
-        x.rect.set(faceCx - offset - radius, faceCy - radius, faceCx - offset + radius, faceCy + radius);
-        b.rect.set(faceCx + offset - radius, faceCy - radius, faceCx + offset + radius, faceCy + radius);
-        a.rect.set(faceCx - radius, faceCy + offset - radius, faceCx + radius, faceCy + offset + radius);
+        float discR = padHalf * 0.98f;
+        discRect.set(padCx - discR, padCy - discR, padCx + discR, padCy + discR);
+
+        if (padType == PAD_BUTTONS) {
+            up.rect.set(padCx - s / 2, padCy - arm - s / 2, padCx + s / 2, padCy - arm + s / 2);
+            down.rect.set(padCx - s / 2, padCy + arm - s / 2, padCx + s / 2, padCy + arm + s / 2);
+            left.rect.set(padCx - arm - s / 2, padCy - s / 2, padCx - arm + s / 2, padCy + s / 2);
+            right.rect.set(padCx + arm - s / 2, padCy - s / 2, padCx + arm + s / 2, padCy + s / 2);
+        }
+
+        // --- ABXY diamond (bottom-right thumb zone)
+        float r = rBaseDp * bs * unit;
+        float off = r * 1.48f;
+        float faceHalf = off + r;
+        float faceCx = w - dp(e) - faceHalf;
+        float faceCy = h - dp(e) - faceHalf;
+        y.rect.set(faceCx - r, faceCy - off - r, faceCx + r, faceCy - off + r);
+        x.rect.set(faceCx - off - r, faceCy - r, faceCx - off + r, faceCy + r);
+        b.rect.set(faceCx + off - r, faceCy - r, faceCx + off + r, faceCy + r);
+        a.rect.set(faceCx - r, faceCy + off - r, faceCx + r, faceCy + off + r);
+        for (Btn btn : new Btn[]{x, y, a, b}) btn.radius = r;
+
+        // --- shoulder keys: mid sides in portrait (thumb reach), top row in landscape
+        float sw = dp(96) * bs;
+        float sh = dp(38) * bs;
+        float shoulderTop;
+        if (landscapeLayout) {
+            shoulderTop = dp(e);
+        } else {
+            float clusterTop = Math.min(padCy - padHalf, faceCy - faceHalf);
+            // Leave room for the disc hint ("按住滑动换方向") between the shoulder row and the pad.
+            shoulderTop = Math.max(dp(48), clusterTop - dp(38) - sh);
+        }
+        l1.rect.set(dp(e), shoulderTop, dp(e) + sw, shoulderTop + sh);
+        r1.rect.set(w - dp(e) - sw, shoulderTop, w - dp(e), shoulderTop + sh);
+
+        // In landscape the shoulder row sits at the very top, so the settings chip moves to the
+        // bottom centre (free space between the two thumb clusters) instead of hiding behind L1.
+        if (landscapeLayout) {
+            float chipLeft = (w - dp(78)) / 2f;
+            float chipTop = h - dp(be) - dp(27);
+            chipRect.set(chipLeft, chipTop, chipLeft + dp(78), chipTop + dp(27));
+        }
+
+        // --- select / start stay in the top band (portrait: right of the settings chip;
+        //     landscape: between the shoulder keys) so they can never collide with the clusters.
+        float mh = dp(27) * bs;
+        float mw = dp(68) * bs;
+        float leftBound;
+        float rightBound;
+        float menuTop;
+        if (landscapeLayout) {
+            leftBound = dp(e) + sw + dp(12);
+            rightBound = w - dp(e) - sw - dp(12);
+            menuTop = (shoulderTop + sh / 2f) - mh / 2f;
+        } else {
+            leftBound = chipRect.right + dp(10);
+            rightBound = w - dp(e);
+            menuTop = dp(10);
+        }
+        float space = Math.max(dp(60), rightBound - leftBound);
+        mw = Math.min(mw, (space - dp(8)) / 2f);
+        float menuCx = (leftBound + rightBound) / 2f;
+        select.rect.set(menuCx - dp(4) - mw, menuTop, menuCx - dp(4), menuTop + mh);
+        start.rect.set(menuCx + dp(4), menuTop, menuCx + dp(4) + mw, menuTop + mh);
     }
 
     @Override
@@ -235,17 +313,15 @@ public final class GamepadView extends View {
     @Override
     protected void onDraw(Canvas canvas) {
         layout();
-        float corner = dp(22);
-        canvas.drawRoundRect(leftCard, corner, corner, cardPaint);
-        canvas.drawRoundRect(rightCard, corner, corner, cardPaint);
         boolean connected = hid != null && hid.isConnected();
         drawSettingsChip(canvas, connected);
         if (padType == PAD_DISC) {
             drawDisc(canvas, connected);
         } else {
-            for (Btn btn : new Btn[]{up, down, left, right}) drawButton(canvas, btn, connected);
+            for (Btn btn : new Btn[]{up, down, left, right}) drawDpadKey(canvas, btn, connected);
         }
-        for (Btn btn : new Btn[]{l1, r1, x, y, a, b, select, start}) drawButton(canvas, btn, connected);
+        for (Btn btn : new Btn[]{x, y, a, b}) drawFace(canvas, btn, connected);
+        for (Btn btn : new Btn[]{l1, r1, select, start}) drawPill(canvas, btn, connected);
     }
 
     private void drawSettingsChip(Canvas canvas, boolean connected) {
@@ -255,7 +331,7 @@ public final class GamepadView extends View {
         chipPaint.setTextAlign(Paint.Align.LEFT);
         float ty = chipRect.centerY() - (chipPaint.descent() + chipPaint.ascent()) / 2f;
         canvas.drawText("移动盘", chipRect.left + dp(12), ty, chipPaint);
-        iconPaint.setColor(connected ? Ui.TEXT_DIM : Ui.TEXT_DIM);
+        iconPaint.setColor(Ui.TEXT_DIM);
         iconPaint.setStrokeWidth(dp(1.6f));
         float ax = chipRect.right - dp(14);
         float ay = chipRect.centerY() - dp(1.5f);
@@ -282,7 +358,6 @@ public final class GamepadView extends View {
             fillPaint.setColor(blend(Ui.KEY, Ui.ACCENT, 0.30f));
             canvas.drawPath(sector, fillPaint);
         }
-        // Diagonal hint dots.
         fillPaint.setColor(blend(Ui.KEY, Ui.TEXT, 0.22f));
         for (int i = 0; i < 4; i++) {
             double ang = Math.toRadians(45 + i * 90);
@@ -290,23 +365,41 @@ public final class GamepadView extends View {
                     cy + (float) Math.sin(ang) * r * 0.86f, dp(1.6f), fillPaint);
         }
         int lit = litDirs(discHat);
-        drawDiscChevron(canvas, cx, cy - r * 0.60f, 0, r * 0.44f,
+        float offset = r * 0.60f;
+        float arrow = r * 0.44f;
+        drawDiscChevron(canvas, cx, cy - offset, 0, arrow,
                 connected ? ((lit & 1) != 0 ? Ui.ACCENT : Ui.TEXT) : Ui.TEXT_DIM);
-        drawDiscChevron(canvas, cx + r * 0.60f, cy, 2, r * 0.44f,
+        drawDiscChevron(canvas, cx + offset, cy, 2, arrow,
                 connected ? ((lit & 2) != 0 ? Ui.ACCENT : Ui.TEXT) : Ui.TEXT_DIM);
-        drawDiscChevron(canvas, cx, cy + r * 0.60f, 4, r * 0.44f,
+        drawDiscChevron(canvas, cx, cy + offset, 4, arrow,
                 connected ? ((lit & 4) != 0 ? Ui.ACCENT : Ui.TEXT) : Ui.TEXT_DIM);
-        drawDiscChevron(canvas, cx - r * 0.60f, cy, 6, r * 0.44f,
+        drawDiscChevron(canvas, cx - offset, cy, 6, arrow,
                 connected ? ((lit & 8) != 0 ? Ui.ACCENT : Ui.TEXT) : Ui.TEXT_DIM);
-        // Centre dot.
         fillPaint.setColor(Ui.SURFACE_2);
         canvas.drawCircle(cx, cy, r * 0.15f, fillPaint);
         fillPaint.setColor(Ui.TEXT_DIM);
         canvas.drawCircle(cx, cy, r * 0.055f, fillPaint);
-        smallPaint.setTextAlign(Paint.Align.CENTER);
+        smallPaint.setTextSize(dp(swTextSize()));
         smallPaint.setColor(discHat == HAT_NEUTRAL || !connected ? Ui.TEXT_DIM : Ui.ACCENT);
         String hint = discHat == HAT_NEUTRAL ? "按住滑动换方向" : "当前：" + DIR_NAMES[discHat];
-        canvas.drawText(hint, cx, cy + r + dp(16), smallPaint);
+        if (landscapeLayout) {
+            // Landscape is short: put the hint to the right of the pad (there is plenty of empty
+            // space between the two thumb clusters) instead of above it where L1 sits.
+            smallPaint.setTextAlign(Paint.Align.LEFT);
+            Ui.fitText(smallPaint, hint, dp(150), dp(7));
+            float ty = cy - (smallPaint.descent() + smallPaint.ascent()) / 2f;
+            canvas.drawText(hint, cx + r + dp(14), ty, smallPaint);
+        } else {
+            smallPaint.setTextAlign(Paint.Align.CENTER);
+            Ui.fitText(smallPaint, hint, r * 1.9f, dp(7));
+            float hintY = cy + r + dp(16);
+            if (hintY > getHeight() - dp(6)) hintY = cy - r - dp(10);
+            canvas.drawText(hint, cx, hintY, smallPaint);
+        }
+    }
+
+    private float swTextSize() {
+        return 11f * Math.max(0.85f, Math.min(1.35f, padScale));
     }
 
     private static int litDirs(int hat) {
@@ -348,27 +441,10 @@ public final class GamepadView extends View {
         canvas.drawPath(path, iconPaint);
     }
 
-    private void drawButton(Canvas canvas, Btn btn, boolean connected) {
-        float pressedRadius = dp(btn.kind == KIND_DPAD ? 16 : 14);
-        if (btn.kind == KIND_FACE) {
-            fillPaint.setColor(btn.pressed ? blend(btn.fill, 0xFFFFFFFF, 0.22f) : btn.fill);
-            canvas.drawCircle(btn.rect.centerX(), btn.rect.centerY(), btn.rect.width() / 2f, fillPaint);
-            labelPaint.setColor(connected ? Ui.TEXT : Ui.TEXT_DIM);
-            Ui.textCenter(canvas, btn.label, btn.rect.centerX(), btn.rect.centerY(), labelPaint);
-            return;
-        }
+    private void drawDpadKey(Canvas canvas, Btn btn, boolean connected) {
         fillPaint.setColor(btn.pressed ? Ui.KEY_PRESSED : btn.fill);
-        canvas.drawRoundRect(btn.rect, pressedRadius, pressedRadius, fillPaint);
-        if (btn.kind == KIND_DPAD) {
-            drawArrow(canvas, btn, connected);
-            return;
-        }
-        smallPaint.setColor(connected ? Ui.TEXT : Ui.TEXT_DIM);
-        smallPaint.setTextAlign(Paint.Align.CENTER);
-        Ui.textCenter(canvas, btn.label, btn.rect.centerX(), btn.rect.centerY(), smallPaint);
-    }
-
-    private void drawArrow(Canvas canvas, Btn btn, boolean connected) {
+        float corner = btn.rect.width() * 0.30f;
+        canvas.drawRoundRect(btn.rect, corner, corner, fillPaint);
         RectF box = new RectF(btn.rect);
         box.inset(btn.rect.width() * 0.26f, btn.rect.height() * 0.26f);
         iconPaint.setColor(connected ? Ui.TEXT : Ui.TEXT_DIM);
@@ -392,6 +468,26 @@ public final class GamepadView extends View {
         canvas.drawPath(path, iconPaint);
     }
 
+    private void drawFace(Canvas canvas, Btn btn, boolean connected) {
+        fillPaint.setColor(btn.pressed ? blend(btn.fill, 0xFFFFFFFF, 0.22f) : btn.fill);
+        canvas.drawCircle(btn.rect.centerX(), btn.rect.centerY(), btn.radius, fillPaint);
+        labelPaint.setColor(connected ? btn.labelColor : Ui.TEXT_DIM);
+        labelPaint.setTextSize(btn.radius * 0.62f);
+        Ui.fitText(labelPaint, btn.label, btn.radius * 1.5f, dp(7));
+        Ui.textCenter(canvas, btn.label, btn.rect.centerX(), btn.rect.centerY(), labelPaint);
+    }
+
+    private void drawPill(Canvas canvas, Btn btn, boolean connected) {
+        fillPaint.setColor(btn.pressed ? Ui.KEY_PRESSED : btn.fill);
+        float radius = Math.min(btn.rect.height() / 2f, dp(16));
+        canvas.drawRoundRect(btn.rect, radius, radius, fillPaint);
+        smallPaint.setTextAlign(Paint.Align.CENTER);
+        smallPaint.setTextSize(btn.rect.height() * 0.40f);
+        smallPaint.setColor(connected ? Ui.TEXT : Ui.TEXT_DIM);
+        Ui.fitText(smallPaint, btn.label, btn.rect.width() - dp(10), dp(6));
+        Ui.textCenter(canvas, btn.label, btn.rect.centerX(), btn.rect.centerY(), smallPaint);
+    }
+
     private static int blend(int base, int over, float f) {
         int br = (base >> 16) & 0xFF, bg = (base >> 8) & 0xFF, bb = base & 0xFF;
         int or = (over >> 16) & 0xFF, og = (over >> 8) & 0xFF, ob = over & 0xFF;
@@ -404,7 +500,14 @@ public final class GamepadView extends View {
     private Btn hit(float x, float y) {
         for (Btn btn : all) {
             if (btn.kind == KIND_DPAD && padType == PAD_DISC) continue;
-            if (btn.rect.contains(x, y)) return btn;
+            if (btn.kind == KIND_FACE) {
+                float dx = x - btn.rect.centerX();
+                float dy = y - btn.rect.centerY();
+                float limit = btn.radius * 1.06f;
+                if (dx * dx + dy * dy <= limit * limit) return btn;
+            } else if (btn.rect.contains(x, y)) {
+                return btn;
+            }
         }
         return null;
     }
@@ -532,19 +635,19 @@ public final class GamepadView extends View {
 
     // -------------------------------------------------------------- settings
 
-    /** Opens the 「手柄设置」 dialog (movement pad type + continuous size). */
+    /** Opens the 「手柄设置」 dialog (movement pad type + two independent size sliders). */
     public void showSettingsDialog() {
         final Context ctx = getContext();
         final Dialog dialog = new Dialog(ctx);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
-        int originalType = padType;
-        float originalShare = padShare;
+        final int originalType = padType;
+        final float originalPadScale = padScale;
+        final float originalBtnScale = btnScale;
 
         LinearLayout box = new LinearLayout(ctx);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dpi(20), dpi(18), dpi(20), dpi(16));
-        GradientDrawable bg = Ui.rounded(ctx, Ui.SURFACE, 22);
-        box.setBackground(bg);
+        box.setBackground(Ui.rounded(ctx, Ui.SURFACE, 22));
 
         TextView title = new TextView(ctx);
         title.setText("手柄设置");
@@ -553,11 +656,10 @@ public final class GamepadView extends View {
         title.setTypeface(null, android.graphics.Typeface.BOLD);
         box.addView(title);
 
-        TextView typeLabel = settingsLabel(ctx, "移动盘类型");
         LinearLayout.LayoutParams labelLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        labelLp.topMargin = dpi(18);
-        box.addView(typeLabel, labelLp);
+        labelLp.topMargin = dpi(16);
+        box.addView(settingsLabel(ctx, "移动盘类型"), labelLp);
 
         final int[] typeHolder = {padType};
         LinearLayout typeRow = segment(ctx, new String[]{"按键", "圆盘"}, padType, which -> {
@@ -570,59 +672,24 @@ public final class GamepadView extends View {
         rowLp.topMargin = dpi(6);
         box.addView(typeRow, rowLp);
 
-        TextView sizeLabel = settingsLabel(ctx, "移动盘大小");
-        LinearLayout.LayoutParams label2 = new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams padLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        label2.topMargin = dpi(16);
-        box.addView(sizeLabel, label2);
+        padLp.topMargin = dpi(14);
+        box.addView(settingsLabel(ctx, "移动盘大小"), padLp);
+        box.addView(sliderRow(ctx, padScale, this::setPadScale));
 
-        LinearLayout sizeRow = new LinearLayout(ctx);
-        sizeRow.setOrientation(LinearLayout.HORIZONTAL);
-        sizeRow.setGravity(Gravity.CENTER_VERTICAL);
-        final TextView valueText = new TextView(ctx);
-        valueText.setTextColor(Ui.ACCENT);
-        valueText.setTextSize(13);
-        valueText.setGravity(Gravity.END);
-        valueText.setSingleLine(true);
-        LinearLayout.LayoutParams valueLp = new LinearLayout.LayoutParams(dpi(46),
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        SeekBar bar = new SeekBar(ctx);
-        bar.setMax(200);
-        bar.setProgressTintList(ColorStateList.valueOf(Ui.ACCENT));
-        bar.setThumbTintList(ColorStateList.valueOf(Ui.ACCENT));
-        bar.setProgress(shareToProgress(padShare));
-        LinearLayout.LayoutParams barLp = new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                float share = progressToShare(progress);
-                setPadShare(share);
-                valueText.setText(Math.round(share * 100) + "%");
-            }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar seekBar) {
-            }
-
-            @Override
-            public void onStopTrackingTouch(SeekBar seekBar) {
-            }
-        });
-        valueText.setText(Math.round(padShare * 100) + "%");
-        sizeRow.addView(bar, barLp);
-        sizeRow.addView(valueText, valueLp);
-        LinearLayout.LayoutParams sizeLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        sizeLp.topMargin = dpi(4);
-        box.addView(sizeRow, sizeLp);
+        LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        btnLp.topMargin = dpi(12);
+        box.addView(settingsLabel(ctx, "按键大小（ABXY / 肩键 / 菜单键）"), btnLp);
+        box.addView(sliderRow(ctx, btnScale, this::setBtnScale));
 
         TextView hint = new TextView(ctx);
-        hint.setText("圆盘：按住并滑动选择方向，松手回中");
+        hint.setText("只缩放按键本身，不改变页面布局；圆盘：按住并滑动选择方向，松手回中");
         hint.setTextColor(Ui.TEXT_DIM);
         hint.setTextSize(11);
         LinearLayout.LayoutParams hintLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         hintLp.topMargin = dpi(10);
         box.addView(hint, hintLp);
 
@@ -640,7 +707,8 @@ public final class GamepadView extends View {
         cancel.setPadding(dpi(14), dpi(9), dpi(14), dpi(9));
         cancel.setOnClickListener(v -> {
             setPadType(originalType);
-            setPadShare(originalShare);
+            setPadScale(originalPadScale);
+            setBtnScale(originalBtnScale);
             dialog.dismiss();
         });
         TextView save = new TextView(ctx);
@@ -671,11 +739,68 @@ public final class GamepadView extends View {
             window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
             WindowManager.LayoutParams lp = new WindowManager.LayoutParams();
             lp.copyFrom(window.getAttributes());
-            lp.width = Math.round(dp(322));
+            lp.width = Math.round(dp(330));
             lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
             window.setAttributes(lp);
         }
         dialog.show();
+    }
+
+    private interface ScalePick {
+        void onScale(float scale);
+    }
+
+    private static int scaleToProgress(float scale) {
+        float t = (clampScale(scale) - SCALE_MIN) / (SCALE_MAX - SCALE_MIN);
+        return Math.round(t * SCALE_STEPS);
+    }
+
+    private static float progressToScale(int progress) {
+        return SCALE_MIN + (SCALE_MAX - SCALE_MIN) * (progress / (float) SCALE_STEPS);
+    }
+
+    private LinearLayout sliderRow(Context ctx, float value, ScalePick pick) {
+        LinearLayout row = new LinearLayout(ctx);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        final TextView valueText = new TextView(ctx);
+        valueText.setTextColor(Ui.ACCENT);
+        valueText.setTextSize(13);
+        valueText.setGravity(Gravity.END);
+        valueText.setSingleLine(true);
+        valueText.setText(Math.round(clampScale(value) * 100) + "%");
+        SeekBar bar = new SeekBar(ctx);
+        bar.setMax(SCALE_STEPS);
+        bar.setProgressTintList(ColorStateList.valueOf(Ui.ACCENT));
+        bar.setThumbTintList(ColorStateList.valueOf(Ui.ACCENT));
+        bar.setProgress(scaleToProgress(value));
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                float scale = progressToScale(progress);
+                pick.onScale(scale);
+                valueText.setText(Math.round(scale * 100) + "%");
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+            }
+        });
+        LinearLayout.LayoutParams barLp = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        LinearLayout.LayoutParams valueLp = new LinearLayout.LayoutParams(dpi(46),
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        rowLp.topMargin = dpi(2);
+        row.addView(bar, barLp);
+        row.addView(valueText, valueLp);
+        row.setLayoutParams(rowLp);
+        return row;
     }
 
     private TextView settingsLabel(Context ctx, String text) {
@@ -684,15 +809,6 @@ public final class GamepadView extends View {
         tv.setTextColor(Ui.TEXT_DIM);
         tv.setTextSize(12);
         return tv;
-    }
-
-    private static int shareToProgress(float share) {
-        float t = (clampShare(share) - SHARE_MIN) / (SHARE_MAX - SHARE_MIN);
-        return Math.round(t * 200);
-    }
-
-    private static float progressToShare(int progress) {
-        return SHARE_MIN + (SHARE_MAX - SHARE_MIN) * (progress / 200f);
     }
 
     private interface Pick {

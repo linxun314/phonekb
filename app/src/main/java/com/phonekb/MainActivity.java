@@ -254,7 +254,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         footer = new TextView(this);
-        footer.setText("PhoneKB v0.17.0 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手 · 伴侣 WiFi");
+        footer.setText("PhoneKB v0.19.0 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手 · 伴侣 WiFi");
         footer.setTextColor(Ui.TEXT_DIM);
         footer.setTextSize(11);
         footer.setGravity(Gravity.CENTER);
@@ -1206,10 +1206,10 @@ public class MainActivity extends Activity {
                         + "电脑布局：顶部一排快捷键 Ctrl+C / Ctrl+V / Ctrl+X / Ctrl+A / Alt+Tab，下面带 Tab、方向键和 Ctrl / Alt / Win，适合敲命令、远程桌面和组合键。\n\n"
                         + "触控板：单指滑动移动指针，单指点击=左键，双指点击=右键，双指上下滑=滚动，右侧 ↑↓ 按住连续滚动；左侧「数字」弹出数字键盘（输入密码），「键盘」弹出简易手机键盘（带数字行，数字也可用来选输入法的候选词），「菜单」等于平板菜单键。\n\n"
                         + "媒体：上一首 / 播放暂停 / 下一首、音量加减、静音、CC、返回 / 主页 / 菜单 / 电源。\n\n"
-                        + "手柄：左侧方向键，右侧 X/Y/A/B 与 L1/R1，底部 SELECT/START。\n\n"
+                        + "手柄：浮在屏幕边缘的手机式布局——左下方向盘（或圆盘），右下 X/Y/A/B，两侧中段 L1/R1，中间下方 SELECT/START，屏幕中间留空不挡画面。左上的「移动盘」按钮打开设置：移动盘「按键 / 圆盘」两种形态，以及「移动盘大小」和「按键大小」两个 60%–150% 的滑块（只缩放按键本身，不改变页面布局）。\n\n"
                         + "双手模式：左边是触控板，右边是按键板（从上到下：音量、媒体、返回 / 主页 / 后台、数字 / 键盘），左右手各管一半。双手页顶部有「互换」键：点一下把触控区和按键区对调（横屏左右对调，竖屏上下对调），方便左右手习惯不同的人；互换状态会记住。\n\n"
                         + "单手模式：右侧（或左侧）面板集中了大触控区和常用键；点「键盘」切成拇指键盘，点「切到遥控台」切回。\n\n"
-                        + "竖屏：键盘页上半部分是触控区、下半部分是贴底的键盘（按键大小和普通手机键盘接近）；中间的分隔条可以上下拖动调整两区比例（拖到 48% / 58% / 62% 附近会吸附，双击分隔条恢复默认 58/42）。触控板页和媒体页的功能区也贴着屏幕底部，顶部分隔条可以拖动调整功能区高度（上方留空方便拇指操作，双击分隔条恢复默认：触控板页 80% / 媒体页 78%）；媒体页顶部还有「触控板」键，可以直接弹出触控板浮层。数字键盘 / 键盘 / 触控板的浮层都从屏幕底部弹出。\n\n"
+                        + "竖屏：键盘页上半部分是触控区、下半部分是贴底的键盘（按键大小和普通手机键盘接近）；中间的分隔条可以上下拖动调整两区比例（拖到 48% / 58% / 62% 附近会吸附，双击分隔条恢复默认 58/42）。触控板页和媒体页的功能区也贴着屏幕底部，顶部分隔条可以拖动调整功能区高度（上方留空方便拇指操作，双击分隔条恢复默认：触控板页 80% / 媒体页 78%）；媒体页顶部还有「触控板」键，可以直接弹出触控板浮层；媒体页还多了「亮度 −/＋」两个键（调屏幕亮度，横屏时它们会移到媒体条左右两侧）。数字键盘 / 键盘 / 触控板的浮层都从屏幕底部弹出。\n\n"
                         + "横屏会自动切换紧凑工具栏和全屏显示。顶部最右侧的「旋转」键可以随时手动切换横竖屏（切过去后会一直保持，直到再点一次；长按「旋转」恢复跟随系统自动旋转）；同一栏最左边的电源键要按住 0.6 秒才发送，避免误触。\n\n"
                         + "界面大小：「自动」会按屏幕宽度和系统字体大小自动适配，换手机或平板不用重新设置；如果按钮文字被截断或界面太挤，可以点下面的「界面大小」选「小」或「标准」。顶部一栏放不下时，右侧会出现「更多」按钮，单手 / 右手 / 互换 / 旋转 / 伴侣 / 帮助会按屏幕宽度自动收进菜单。\n\n"
                         + "中文输入：蓝牙键盘只能发送字母和按键，中文需要平板自己的输入法；需要直接打中文时请等后续的 WiFi 配套应用。\n\n"
@@ -1365,8 +1365,16 @@ public class MainActivity extends Activity {
         if (gamepadView != null && intent.hasExtra("gptype")) {
             gamepadView.setPadType(intent.getIntExtra("gptype", 0));
         }
+        if (gamepadView != null && intent.hasExtra("gppad")) {
+            gamepadView.setPadScale(intent.getIntExtra("gppad", 100) / 100f);
+        }
+        if (gamepadView != null && intent.hasExtra("gpbtn")) {
+            gamepadView.setBtnScale(intent.getIntExtra("gpbtn", 100) / 100f);
+        }
         if (gamepadView != null && intent.hasExtra("gpsize")) {
-            gamepadView.setPadShare(intent.getIntExtra("gpsize", 42) / 100f);
+            float both = intent.getIntExtra("gpsize", 100) / 100f;
+            gamepadView.setPadScale(both);
+            gamepadView.setBtnScale(both);
         }
         if (gamepadView != null && intent.getIntExtra("gpdialog", 0) == 1) {
             contentFrame.postDelayed(gamepadView::showSettingsDialog, 700);
@@ -1376,6 +1384,20 @@ public class MainActivity extends Activity {
         int gpTest = intent.getIntExtra("gptest", 0);
         if (gpTest > 0) {
             new Thread(() -> runGamepadSelfTest(gpTest), "gamepad-self-test").start();
+        }
+        // Debug/test hook: fire the brightness consumer usages so the host can capture them
+        // with "adb shell getevent" (adb cannot tap the on-screen brightness keys).
+        if (intent.getIntExtra("brighttest", 0) == 1) {
+            new Thread(() -> {
+                if (hid == null) return;
+                sleepQuietly(1200);
+                for (int i = 0; i < 2; i++) {
+                    hid.tapConsumer(HidConstants.CONSUMER_BRIGHTNESS_INCREMENT);
+                    sleepQuietly(600);
+                    hid.tapConsumer(HidConstants.CONSUMER_BRIGHTNESS_DECREMENT);
+                    sleepQuietly(600);
+                }
+            }, "brightness-self-test").start();
         }
     }
 
