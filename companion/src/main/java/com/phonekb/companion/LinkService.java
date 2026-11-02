@@ -15,6 +15,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.provider.Settings;
 import android.util.Log;
 
 import org.json.JSONObject;
@@ -443,6 +444,11 @@ public class LinkService extends Service {
                 copyClipboard(text);
                 notifyIncoming("clip", text);
                 ack(out, "clip", "ok");
+            } else if ("bright".equals(t)) {
+                String dir = o.optString("dir", "up");
+                String result = adjustBrightness("down".equals(dir) ? -1 : 1, o.optInt("step", 0));
+                notifyIncoming("bright", result);
+                ack(out, "bright", result);
             } else if ("ping".equals(t)) {
                 JSONObject pong = new JSONObject();
                 pong.put("t", "pong");
@@ -457,6 +463,46 @@ public class LinkService extends Service {
         InjectorService inj = InjectorService.get();
         if (inj == null) return "无障碍服务未开启";
         return inj.injectText(text, append);
+    }
+
+    /**
+     * 改系统亮度：手机发出的 HID 亮度键在部分定制 ROM（如 vivo）上被忽略，
+     * 所以由本机直接读改写 Settings.System.SCREEN_BRIGHTNESS（需要「修改系统设置」权限）。
+     */
+    private String adjustBrightness(int delta, int step) {
+        try {
+            if (!Settings.System.canWrite(this)) {
+                return "需要在平板授予「修改系统设置」权限";
+            }
+            if (step <= 0) step = 20;
+            int cur;
+            try {
+                cur = Settings.System.getInt(getContentResolver(), Settings.System.SCREEN_BRIGHTNESS);
+            } catch (Exception e) {
+                cur = 128;
+            }
+            int max = 255;
+            try {
+                max = Settings.System.getInt(getContentResolver(), "screen_brightness_max", 255);
+            } catch (Exception ignored) {
+            }
+            if (max < 40 || max > 100000) max = 255;
+            // 自动亮度会让写进去的值立刻被覆盖，先切成手动模式
+            try {
+                Settings.System.putInt(getContentResolver(),
+                        Settings.System.SCREEN_BRIGHTNESS_MODE,
+                        Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL);
+            } catch (Exception ignored) {
+            }
+            int stepPx = Math.max(1, Math.round(max / 255f * step));
+            int next = Math.max(Math.max(1, max / 100), Math.min(max, cur + delta * stepPx));
+            Settings.System.putInt(getContentResolver(), Settings.System.SCREEN_BRIGHTNESS, next);
+            Log.i(TAG, "brightness " + cur + " -> " + next + " (max " + max + ")");
+            return "ok " + Math.round(next * 100f / max) + "%";
+        } catch (Throwable t) {
+            Log.w(TAG, "brightness: " + t.getClass().getSimpleName() + ": " + t.getMessage());
+            return "调整失败：" + t.getClass().getSimpleName();
+        }
     }
 
     private void ack(BufferedWriter out, String what, String result) {

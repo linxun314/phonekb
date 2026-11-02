@@ -291,6 +291,18 @@ public final class CompanionBridge {
         }
     }
 
+    /** 平板亮度 +1/-1（本机 HID 亮度键在部分定制系统上无效，改由伴侣 App 直接改系统亮度）。 */
+    public boolean sendBright(boolean up) {
+        try {
+            JSONObject o = new JSONObject();
+            o.put("t", "bright");
+            o.put("dir", up ? "up" : "down");
+            return sendJson(o);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public boolean ping() {
         try {
             JSONObject o = new JSONObject();

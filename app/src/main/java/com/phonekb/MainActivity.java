@@ -24,6 +24,7 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
 public class MainActivity extends Activity {
 
@@ -254,7 +255,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         footer = new TextView(this);
-        footer.setText("PhoneKB v0.19.0 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手 · 伴侣 WiFi");
+        footer.setText("PhoneKB v0.20.0 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手 · 伴侣 WiFi");
         footer.setTextColor(Ui.TEXT_DIM);
         footer.setTextSize(11);
         footer.setGravity(Gravity.CENTER);
@@ -587,6 +588,16 @@ public class MainActivity extends Activity {
             }
         });
         mediaView = new MediaView(this, hid);
+        mediaView.setBrightnessListener(up -> {
+            final CompanionBridge bridge = CompanionBridge.get(this);
+            if (bridge.isConnected()) {
+                bridge.sendBright(up);
+            } else {
+                Toast.makeText(this,
+                        "这台平板不响应蓝牙亮度键。打开顶部「伴侣」并连上 WiFi 通道后，亮度键改走 WiFi 直接调系统亮度。",
+                        Toast.LENGTH_LONG).show();
+            }
+        });
         if (!landscape) {
             mediaView.setToolpadRow(true);
             mediaView.setTouchpadAction(() -> toggleOverlay(OVERLAY_TOUCHPAD));
@@ -1209,7 +1220,7 @@ public class MainActivity extends Activity {
                         + "手柄：浮在屏幕边缘的手机式布局——左下方向盘（或圆盘），右下 X/Y/A/B，两侧中段 L1/R1，中间下方 SELECT/START，屏幕中间留空不挡画面。左上的「移动盘」按钮打开设置：移动盘「按键 / 圆盘」两种形态，以及「移动盘大小」和「按键大小」两个 60%–150% 的滑块（只缩放按键本身，不改变页面布局）。\n\n"
                         + "双手模式：左边是触控板，右边是按键板（从上到下：音量、媒体、返回 / 主页 / 后台、数字 / 键盘），左右手各管一半。双手页顶部有「互换」键：点一下把触控区和按键区对调（横屏左右对调，竖屏上下对调），方便左右手习惯不同的人；互换状态会记住。\n\n"
                         + "单手模式：右侧（或左侧）面板集中了大触控区和常用键；点「键盘」切成拇指键盘，点「切到遥控台」切回。\n\n"
-                        + "竖屏：键盘页上半部分是触控区、下半部分是贴底的键盘（按键大小和普通手机键盘接近）；中间的分隔条可以上下拖动调整两区比例（拖到 48% / 58% / 62% 附近会吸附，双击分隔条恢复默认 58/42）。触控板页和媒体页的功能区也贴着屏幕底部，顶部分隔条可以拖动调整功能区高度（上方留空方便拇指操作，双击分隔条恢复默认：触控板页 80% / 媒体页 78%）；媒体页顶部还有「触控板」键，可以直接弹出触控板浮层；媒体页还多了「亮度 −/＋」两个键（调屏幕亮度，横屏时它们会移到媒体条左右两侧）。数字键盘 / 键盘 / 触控板的浮层都从屏幕底部弹出。\n\n"
+                        + "竖屏：键盘页上半部分是触控区、下半部分是贴底的键盘（按键大小和普通手机键盘接近）；中间的分隔条可以上下拖动调整两区比例（拖到 48% / 58% / 62% 附近会吸附，双击分隔条恢复默认 58/42）。触控板页和媒体页的功能区也贴着屏幕底部，顶部分隔条可以拖动调整功能区高度（上方留空方便拇指操作，双击分隔条恢复默认：触控板页 80% / 媒体页 78%）；媒体页顶部还有「触控板」键，可以直接弹出触控板浮层；媒体页还多了「亮度 −/＋」两个键（调屏幕亮度，横屏时它们会移到媒体条左右两侧）。亮度键会先发蓝牙 HID；像 vivo 这类不响应亮度键的平板，请打开顶栏「伴侣」连上 WiFi，并在平板伴侣里授权「修改系统设置」，之后亮度键改走 WiFi 直接改平板系统亮度。数字键盘 / 键盘 / 触控板的浮层都从屏幕底部弹出。\n\n"
                         + "横屏会自动切换紧凑工具栏和全屏显示。顶部最右侧的「旋转」键可以随时手动切换横竖屏（切过去后会一直保持，直到再点一次；长按「旋转」恢复跟随系统自动旋转）；同一栏最左边的电源键要按住 0.6 秒才发送，避免误触。\n\n"
                         + "界面大小：「自动」会按屏幕宽度和系统字体大小自动适配，换手机或平板不用重新设置；如果按钮文字被截断或界面太挤，可以点下面的「界面大小」选「小」或「标准」。顶部一栏放不下时，右侧会出现「更多」按钮，单手 / 右手 / 互换 / 旋转 / 伴侣 / 帮助会按屏幕宽度自动收进菜单。\n\n"
                         + "中文输入：蓝牙键盘只能发送字母和按键，中文需要平板自己的输入法；需要直接打中文时请等后续的 WiFi 配套应用。\n\n"
@@ -1398,6 +1409,16 @@ public class MainActivity extends Activity {
                     sleepQuietly(600);
                 }
             }, "brightness-self-test").start();
+        }
+        // Debug/test hook: drive the wireless (WiFi companion) brightness path directly, because
+        // adb cannot tap the on-screen brightness keys on the phone.
+        final int wifiBright = intent.getIntExtra("brightwifi", 0);
+        if (wifiBright != 0) {
+            contentFrame.postDelayed(() -> {
+                for (int i = 0; i < Math.abs(wifiBright); i++) {
+                    CompanionBridge.get(this).sendBright(wifiBright > 0);
+                }
+            }, 1500);
         }
     }
 

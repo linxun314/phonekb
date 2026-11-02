@@ -70,6 +70,7 @@ public class MainActivity extends Activity implements LinkService.Listener {
     private EditText tokenInput;
     private TextView netState;
     private TextView accessState;
+    private TextView brightState;
     private TextView logView;
     private ImageView qrView;
     private TextView qrTip;
@@ -112,6 +113,7 @@ public class MainActivity extends Activity implements LinkService.Listener {
         super.onResume();
         LinkService.setListener(this);
         refreshAccessibility();
+        refreshBrightnessPermission();
         refreshNet();
         if (LinkService.getState() != LinkService.STATE_CONNECTED) {
             LinkService.startPairing(this);
@@ -227,6 +229,25 @@ public class MainActivity extends Activity implements LinkService.Listener {
         accessCard(accCard);
         col.addView(accCard, cardLp());
 
+        // 亮度卡（可选）：手机「媒体」页的亮度键会通过 WiFi 调本机系统亮度
+        LinearLayout brightCard = card();
+        brightCard.addView(sectionTitle("屏幕亮度（可选）"));
+        brightState = plain("", 13, TEXT_DIM);
+        brightState.setPadding(0, dp(6), 0, 0);
+        brightCard.addView(brightState);
+        LinearLayout brightRow = new LinearLayout(this);
+        brightRow.setOrientation(LinearLayout.HORIZONTAL);
+        TextView openWrite = pill("授予「修改系统设置」权限");
+        openWrite.setOnClickListener(v -> openWriteSettings());
+        brightRow.addView(openWrite);
+        brightCard.addView(brightRow, lpWrapWrapWithTop(dp(10)));
+        TextView brightNote = plain(
+                "有些平板（vivo 等）不响应蓝牙键盘的亮度键，手机「媒体」页的亮度 −/＋ 会改走这条 WiFi 通道。"
+                        + "需要一次授权：打开下面的开关后返回即可。", 12, TEXT_DIM);
+        brightNote.setLineSpacing(dp(3), 1f);
+        brightCard.addView(brightNote, lpMatchWrapWithTop(dp(8)));
+        col.addView(brightCard, cardLp());
+
         // 日志卡
         LinearLayout logCard = card();
         logCard.addView(sectionTitle("最近消息"));
@@ -244,7 +265,8 @@ public class MainActivity extends Activity implements LinkService.Listener {
                         + "2. 手机打开 PhoneKB → 顶栏「伴侣」→ 点「扫码连接平板」，对着本页二维码拍一张，自动配对\n"
                         + "3. 开启下面的无障碍服务（只需一次）\n"
                         + "4. 在平板点一下要输入的输入框，手机伴侣页发送中文即可上屏\n"
-                        + "5. 平板复制的文字会自动同步到手机剪贴板\n\n"
+                        + "5. 平板复制的文字会自动同步到手机剪贴板\n"
+                        + "6. 手机「媒体」页的亮度 −/＋：先在上面授权「修改系统设置」，之后直接调本机亮度\n\n"
                         + "也可以反过来：点「扫手机码（备用）」拍手机屏幕上的二维码（旧版配对方式）。\n"
                         + "蓝牙 HID 和伴侣模式互不影响。", 12, TEXT_DIM);
         g.setLineSpacing(dp(3), 1f);
@@ -553,6 +575,33 @@ public class MainActivity extends Activity implements LinkService.Listener {
         }
     }
 
+    private void openWriteSettings() {
+        try {
+            Intent i = new Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS,
+                    Uri.parse("package:" + getPackageName()));
+            startActivity(i);
+            toast("把「允许修改系统设置」打开后返回");
+        } catch (Exception e) {
+            toast("无法打开系统设置，请手动到 设置 → 应用 → 修改系统设置");
+        }
+    }
+
+    private void refreshBrightnessPermission() {
+        if (brightState == null) return;
+        boolean can = false;
+        try {
+            can = Settings.System.canWrite(this);
+        } catch (Exception ignored) {
+        }
+        if (can) {
+            brightState.setText("● 已授权：手机亮度键可以调本机亮度");
+            brightState.setTextColor(OK);
+        } else {
+            brightState.setText("● 未授权：手机亮度键只会发蓝牙 HID，这个平板可能没反应");
+            brightState.setTextColor(WARN);
+        }
+    }
+
     private void refreshAccessibility() {
         if (accessState == null) return;
         boolean on = InjectorService.isReady() || isAccessibilityEnabled();
@@ -594,6 +643,10 @@ public class MainActivity extends Activity implements LinkService.Listener {
     public void onIncoming(String kind, String text) {
         if ("clip".equals(kind)) {
             addLog("← 收到剪贴板：" + clipForLog(text));
+        } else if ("bright".equals(kind)) {
+            addLog("← 调亮度：" + text);
+            refreshBrightnessPermission();
+            return;
         } else {
             addLog("← 收到文字：" + clipForLog(text));
         }

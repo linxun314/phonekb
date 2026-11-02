@@ -82,6 +82,13 @@ public class MediaView extends View {
     private boolean pressedToolpad;
     private Runnable touchpadAction;
 
+    /** HID brightness usages are ignored by some OEM ROMs; the activity also drives the WiFi companion. */
+    public interface BrightnessListener {
+        void onBrightness(boolean up);
+    }
+
+    private BrightnessListener brightnessListener;
+
     public MediaView(Context context, HidManager hid) {
         super(context);
         this.hid = hid;
@@ -120,6 +127,10 @@ public class MediaView extends View {
 
     public void setTouchpadAction(Runnable action) {
         touchpadAction = action;
+    }
+
+    public void setBrightnessListener(BrightnessListener l) {
+        brightnessListener = l;
     }
 
     @Override
@@ -319,6 +330,9 @@ public class MediaView extends View {
                         pressedBright = i;
                         performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
                         hid.tapConsumer(BRIGHT_USAGES[i]);
+                        if (brightnessListener != null) {
+                            brightnessListener.onBrightness(i == BRIGHT_UP);
+                        }
                         invalidate();
                         return true;
                     }
