@@ -26,7 +26,6 @@ public class TouchpadView extends View {
     private static final int MOUSE_RIGHT = 2;
     private static final int MOUSE_MIDDLE = 4;
 
-    private static final float POINTER_SPEED = 1.7f;
     private static final long TAP_MAX_MS = 300;
 
     private final HidManager hid;
@@ -246,15 +245,17 @@ public class TouchpadView extends View {
                     for (int i = 0; i < hist; i++) {
                         float hx = e.getHistoricalX(0, i);
                         float hy = e.getHistoricalY(0, i);
-                        accumX += (hx - px) * POINTER_SPEED;
-                        accumY += (hy - py) * POINTER_SPEED;
+                        float gain = PointerSettings.gain(getContext(), hx - px, hy - py);
+                        accumX += (hx - px) * gain;
+                        accumY += (hy - py) * gain;
                         px = hx;
                         py = hy;
                     }
                     float x = e.getX();
                     float y = e.getY();
-                    accumX += (x - px) * POINTER_SPEED;
-                    accumY += (y - py) * POINTER_SPEED;
+                    float gain = PointerSettings.gain(getContext(), x - px, y - py);
+                    accumX += (x - px) * gain;
+                    accumY += (y - py) * gain;
                     lastX = x;
                     lastY = y;
                     int dx = (int) accumX;
@@ -272,7 +273,7 @@ public class TouchpadView extends View {
                     float y = (e.getY(0) + e.getY(1)) / 2f;
                     scrollAcc += y - lastScrollY;
                     lastScrollY = y;
-                    float step = Ui.dp(getContext(), 20);
+                    float step = PointerSettings.scrollStepPx(getContext(), 20f);
                     int steps = 0;
                     while (scrollAcc >= step) {
                         steps++;

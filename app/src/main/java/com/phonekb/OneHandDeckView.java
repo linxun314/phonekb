@@ -34,7 +34,6 @@ public class OneHandDeckView extends View {
     private static final int B_MUTE = 8;
     private static final int BUTTON_COUNT = 9;
 
-    private static final float POINTER_SPEED = 1.7f;
     private static final long TAP_MAX_MS = 300;
 
     private final HidManager hid;
@@ -264,7 +263,7 @@ public class OneHandDeckView extends View {
                     scrollAccum += (y - lastY);
                     lastY = y;
                     lastX = e.getX(0);
-                    float step = Ui.dp(getContext(), 18);
+                    float step = PointerSettings.scrollStepPx(getContext(), 18f);
                     int steps = (int) (scrollAccum / step);
                     if (steps != 0) {
                         hid.mouseWheel(steps);
@@ -274,8 +273,9 @@ public class OneHandDeckView extends View {
                 } else {
                     float x = e.getX(0);
                     float y = e.getY(0);
-                    accumX += (x - lastX) * POINTER_SPEED;
-                    accumY += (y - lastY) * POINTER_SPEED;
+                    float gain = PointerSettings.gain(getContext(), x - lastX, y - lastY);
+                    accumX += (x - lastX) * gain;
+                    accumY += (y - lastY) * gain;
                     lastX = x;
                     lastY = y;
                     int dx = (int) accumX;

@@ -144,6 +144,7 @@ public class MainActivity extends Activity {
         }
         Ui.setSimulation(simWidthDp, simFontScale);
         Ui.init(this);
+        PointerSettings.init(this);
         // Draw edge-to-edge and let installInsetsPadding() turn the reported insets into
         // padding. That is the only reliable way to be correct on notch/gesture-bar devices.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -255,7 +256,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         footer = new TextView(this);
-        footer.setText("PhoneKB v0.24.1 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手 · 伴侣 WiFi");
+        footer.setText("PhoneKB v0.25.0 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手 · 伴侣 WiFi");
         footer.setTextColor(Ui.TEXT_DIM);
         footer.setTextSize(11);
         footer.setGravity(Gravity.CENTER);
@@ -1063,6 +1064,11 @@ public class MainActivity extends Activity {
             if (page == null) continue;
             page.setVisibility(!oneHandMode && i == currentTab ? View.VISIBLE : View.GONE);
         }
+        if (gamepadView != null && (oneHandMode || currentTab != TAB_GAMEPAD)) {
+            // Leaving the gamepad page must also leave the free layout editor: otherwise coming
+            // back later still shows the dashed drag boxes, as if the edits were never confirmed.
+            gamepadView.setEditing(false);
+        }
         if (oneHandContainer != null) {
             oneHandContainer.setVisibility(oneHandMode ? View.VISIBLE : View.GONE);
         }
@@ -1215,6 +1221,7 @@ public class MainActivity extends Activity {
                 .setMessage("键盘：字母、数字和符号直接发到平板。键盘顶部有一行大工具栏：左边「切换布局」在手机布局和电脑布局之间来回切（会记住上次的选择），右边「触控板」键弹出触控板浮层（大触控区 + 右侧 ↑↓ 滚动 + 底部 返回/主页/后台），不用切页面就能移动指针和点击。\n\n"
                         + "手机布局：和普通手机键盘一样（数字行 1-0、qwerty、Shift / ⌫、Space / Enter），左下「符号」进入符号页，符号页左下「ABC」返回字母；数字行也可以用来选中文输入法的候选词。\n\n"
                         + "电脑布局：顶部一排快捷键 Ctrl+C / Ctrl+V / Ctrl+X / Ctrl+A / Alt+Tab，下面带 Tab、方向键和 Ctrl / Alt / Win，适合敲命令、远程桌面和组合键。\n\n"
+                        + "指针灵敏度：触控板页触控卡片左上角的「灵敏度 1.0x」胶囊可以打开设置——指针速度 0.4x–2.5x（1.0x 就是以前的手感）、加速度（快扫自动加速）、滚轮速度（一次滑动滚几行）；改完对触控板页、单手遥控台、触控板浮层、手柄页触控区同时生效，并且会记住。\n\n"
                         + "触控板：单指滑动移动指针，单指点击=左键，双指点击=右键，双指上下滑=滚动，右侧 ↑↓ 按住连续滚动；左侧「数字」弹出数字键盘（输入密码），「键盘」弹出简易手机键盘（带数字行，数字也可用来选输入法的候选词），「菜单」等于平板菜单键。\n\n"
                         + "媒体：上一首 / 播放暂停 / 下一首、音量加减、静音、CC、返回 / 主页 / 菜单 / 电源。\n\n"
                         + "手柄：左上的「移动盘」按钮打开设置，里有三个段：「布局」可选 浮键 / 皮肤；「移动盘类型」按键 / 圆盘；「移动盘大小」「按键大小」两个 60%–150% 滑块（只缩放按键本身）。浮键＝现在这套：左下方向盘、右下 X/Y/A/B、两侧中段 L1/R1、菜单键在顶部条；皮肤＝整机手柄外观：圆角机身 + 十字键圆环 + ABXY 圆环 + LB/LT/RB/RT + 左右 L/R 模拟摇杆（摇杆是 4 个轴，换新版后平板要「忘记设备→重新配对」一次才会识别）+ 居中的 SELECT/START。自定义位置：在设置里点「编辑布局·拖动按键改位置」，或者在手柄页空白处按住 3 秒，进入编辑模式后每个键出现蓝虚线框，单指拖动即可挪位置，松手自动保存；顶部有「重置 / 完成」，横屏和竖屏各存一套。「触控」小键一键切换 关 / 中间 / 全屏：中间＝页面正中一块看得见边界的触控板；全屏＝除按键外整片空白都能触控。触控板手势和「触控板」页一致：单指移动、轻点＝左键、双指点击＝右键、双指上下滑＝滚动；「只移动」档位下只移指针不点击。注意：浮键布局下 LT/RT 不显示，皮肤布局才有肩键 LB/LT/RB/RT。\n\n"
@@ -1402,6 +1409,20 @@ public class MainActivity extends Activity {
         }
         if (gamepadView != null && intent.hasExtra("gplayout")) {
             gamepadView.setLayoutMode(intent.getIntExtra("gplayout", 0));
+        }
+        // Debug/test hook: pointer sensitivity, so adb screenshots can cover every chip state.
+        if (intent.hasExtra("sens")) {
+            PointerSettings.setSpeed(this, intent.getIntExtra("sens", 100) / 100f);
+        }
+        if (intent.hasExtra("rows")) {
+            PointerSettings.setRows(this, intent.getIntExtra("rows", 3));
+        }
+        if (intent.hasExtra("accel")) {
+            PointerSettings.setAccel(this, intent.getIntExtra("accel", 1) == 1);
+        }
+        if (touchpadView != null) touchpadView.invalidate();
+        if (touchpadView != null && intent.getIntExtra("sensdialog", 0) == 1) {
+            contentFrame.postDelayed(touchpadView::showSensitivityDialog, 700);
         }
         if (gamepadView != null && intent.getIntExtra("gpedit", 0) == 1) {
             contentFrame.postDelayed(() -> gamepadView.setEditing(true), 600);

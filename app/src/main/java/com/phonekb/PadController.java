@@ -17,14 +17,12 @@ public final class PadController {
     private static final int MODE_DRAG = 2;
     private static final int MOUSE_LEFT = 1;
     private static final int MOUSE_RIGHT = 2;
-    private static final float POINTER_SPEED = 1.7f;
     private static final long TAP_MAX_MS = 300;
     private static final long LONG_PRESS_MS = 450;
 
     private final View view;
     private final HidManager hid;
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private final float step;
     private final float slop;
 
     private int mode = MODE_NONE;
@@ -55,7 +53,6 @@ public final class PadController {
         this.view = view;
         this.hid = hid;
         Context context = view.getContext();
-        step = Ui.dp(context, 10);
         slop = Ui.dp(context, 8);
     }
 
@@ -101,8 +98,9 @@ public final class PadController {
                 if (mode == MODE_DRAG) {
                     float x = e.getX(0);
                     float y = e.getY(0);
-                    accumX += (x - lastX) * POINTER_SPEED;
-                    accumY += (y - lastY) * POINTER_SPEED;
+                    float gain = PointerSettings.gain(view.getContext(), x - lastX, y - lastY);
+                    accumX += (x - lastX) * gain;
+                    accumY += (y - lastY) * gain;
                     lastX = x;
                     lastY = y;
                     int dx = (int) accumX;
@@ -120,6 +118,7 @@ public final class PadController {
                     float y = averageY(e);
                     scrollAcc += y - lastScrollY;
                     lastScrollY = y;
+                    float step = PointerSettings.scrollStepPx(view.getContext(), 10f);
                     int steps = 0;
                     while (scrollAcc >= step) {
                         steps++;
@@ -139,8 +138,9 @@ public final class PadController {
                 } else {
                     float x = e.getX(0);
                     float y = e.getY(0);
-                    accumX += (x - lastX) * POINTER_SPEED;
-                    accumY += (y - lastY) * POINTER_SPEED;
+                    float gain = PointerSettings.gain(view.getContext(), x - lastX, y - lastY);
+                    accumX += (x - lastX) * gain;
+                    accumY += (y - lastY) * gain;
                     lastX = x;
                     lastY = y;
                     int dx = (int) accumX;

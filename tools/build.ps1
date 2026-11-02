@@ -3,8 +3,8 @@ param(
     [string]$Module = "app",
     [string]$PackageName = "com.phonekb",
     [string]$OutName = "PhoneKB",
-    [string]$VersionName = "0.24.1",
-    [int]$VersionCode = 38,
+    [string]$VersionName = "0.25.0",
+    [int]$VersionCode = 39,
     [int]$MinSdk = 28,
     [int]$TargetSdk = 36
 )

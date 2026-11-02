@@ -61,7 +61,6 @@ public final class GamepadView extends View {
 
     private static final int MOUSE_LEFT = 1;
     private static final int MOUSE_RIGHT = 2;
-    private static final float POINTER_SPEED = 1.7f;
     private static final long TAP_MAX_MS = 220;
 
     private static final int HAT_NEUTRAL = 0x0F;
@@ -935,6 +934,15 @@ public final class GamepadView extends View {
         invalidate();
     }
 
+    @Override
+    protected void onWindowVisibilityChanged(int visibility) {
+        super.onWindowVisibilityChanged(visibility);
+        if (visibility != VISIBLE && editing) {
+            // Switching pages hides the view without destroying it: never keep the editor armed.
+            setEditing(false);
+        }
+    }
+
     private boolean handleEditTouch(MotionEvent e) {
         int action = e.getActionMasked();
         if (action == MotionEvent.ACTION_DOWN) {
@@ -1529,7 +1537,17 @@ public final class GamepadView extends View {
                 invalidate();
                 return true;
             }
-            if (!tpOpen && touchMode == TOUCH_OFF && hit(e.getX(), e.getY()) == null) {
+            // The in-page touch pad is a real, visible panel: it owns every touch inside it, even
+            // when a freely moved key happens to sit underneath. Without this the pad would fire
+            // the key below it, and holding there would arm the layout editor by accident.
+            if (!tpOpen && touchMode == TOUCH_PANEL && inTouchArea(e.getX(), e.getY())) {
+                removeCallbacks(editPress);
+                blankPressed = false;
+                startTouchPad(e, 0);
+                return true;
+            }
+            if (!tpOpen && touchMode == TOUCH_OFF && !inTouchArea(e.getX(), e.getY())
+                    && hit(e.getX(), e.getY()) == null) {
                 // Long-press empty space to jump straight into the layout editor.
                 blankPressed = true;
                 removeCallbacks(editPress);
@@ -1764,6 +1782,8 @@ public final class GamepadView extends View {
         holdPressed = false;
         holdDragging = false;
         removeCallbacks(holdLongPress);
+        removeCallbacks(editPress);
+        blankPressed = false;
         resetTouchPad();
         layout();
         invalidate();
@@ -1803,6 +1823,8 @@ public final class GamepadView extends View {
     }
 
     private void startTouchPad(MotionEvent e, int index) {
+        removeCallbacks(editPress);
+        blankPressed = false;
         tpMode = TP_PAD;
         tpPointerId = e.getPointerId(index);
         tpDownX = e.getX(index);
@@ -1828,7 +1850,7 @@ public final class GamepadView extends View {
             float dy = y - tpLastScrollY;
             tpLastScrollY = y;
             tpScrollAcc += dy;
-            float step = dp(20);
+            float step = PointerSettings.scrollStepPx(getContext(), 20f);
             int steps = (int) (tpScrollAcc / step);
             if (steps != 0) {
                 tpScrollAcc -= steps * step;
@@ -1846,15 +1868,17 @@ public final class GamepadView extends View {
         for (int i = 0; i < hist; i++) {
             float hx = e.getHistoricalX(idx, i);
             float hy = e.getHistoricalY(idx, i);
-            tpAccumX += (hx - px) * POINTER_SPEED;
-            tpAccumY += (hy - py) * POINTER_SPEED;
+            float gain = PointerSettings.gain(getContext(), hx - px, hy - py);
+            tpAccumX += (hx - px) * gain;
+            tpAccumY += (hy - py) * gain;
             px = hx;
             py = hy;
         }
         float x = e.getX(idx);
         float y = e.getY(idx);
-        tpAccumX += (x - px) * POINTER_SPEED;
-        tpAccumY += (y - py) * POINTER_SPEED;
+        float gain = PointerSettings.gain(getContext(), x - px, y - py);
+        tpAccumX += (x - px) * gain;
+        tpAccumY += (y - py) * gain;
         tpLastX = x;
         tpLastY = y;
         int dx = (int) tpAccumX;

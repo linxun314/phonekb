@@ -54,6 +54,9 @@ public class ControlPadView extends View {
     private final Paint labelPaint;
     private final Paint labelDimPaint;
     private final Paint hintPaint;
+    private final Paint sensTextPaint;
+    private final Paint sensBgPaint = Ui.fill(Ui.SURFACE_2);
+    private final Paint sensStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     private final RectF numpadRect = new RectF();
     private final RectF keyboardRect = new RectF();
@@ -64,6 +67,7 @@ public class ControlPadView extends View {
     private final RectF backRect = new RectF();
     private final RectF homeRect = new RectF();
     private final RectF recentsRect = new RectF();
+    private final RectF sensChipRect = new RectF();
 
     private final float margin;
     private final float gap;
@@ -113,6 +117,11 @@ public class ControlPadView extends View {
         labelPaint = Ui.text(context, 14, Ui.TEXT);
         labelDimPaint = Ui.text(context, 14, Ui.TEXT_DIM);
         hintPaint = Ui.text(context, 13, Ui.TEXT_DIM);
+        sensTextPaint = Ui.text(context, 11, Ui.ACCENT);
+        sensStrokePaint.setStyle(Paint.Style.STROKE);
+        sensStrokePaint.setStrokeWidth(Ui.dp(context, 1.2f));
+        sensStrokePaint.setColor(Ui.ACCENT);
+        PointerSettings.init(context);
     }
 
     public void setListener(Listener listener) {
@@ -153,6 +162,7 @@ public class ControlPadView extends View {
         padRect.set(padLeft, margin, padLeft + padW, margin + mainH);
         scrollUpRect.set(padRect.right + gap, margin, margin + contentW, margin + (mainH - gap) / 2f);
         scrollDownRect.set(scrollUpRect.left, scrollUpRect.bottom + gap, scrollUpRect.right, margin + mainH);
+        updateSensChip();
 
         float navTop = margin + mainH + gap;
         float navBottom = margin + contentH;
@@ -199,6 +209,7 @@ public class ControlPadView extends View {
         Ui.textCenter(canvas, "触控区", padRect.centerX(), padRect.centerY() - Ui.dp(getContext(), 13), hintPaint);
         Ui.textCenter(canvas, "单指移动 · 点击=左键 · 双指滚动", padRect.centerX(),
                 padRect.centerY() + Ui.dp(getContext(), 14), hintPaint);
+        drawSensChip(canvas);
 
         drawKey(canvas, scrollUpRect, pressedKey == PRESS_SCROLL_UP);
         drawKey(canvas, scrollDownRect, pressedKey == PRESS_SCROLL_DOWN);
@@ -211,6 +222,32 @@ public class ControlPadView extends View {
         Icons.draw(canvas, Icons.BACK, iconBox(backRect), icon);
         Icons.draw(canvas, Icons.HOME, iconBox(homeRect), icon);
         Icons.draw(canvas, Icons.RECENTS, iconBox(recentsRect), icon);
+    }
+
+    /** 「灵敏度 1.0x」 pill in the top-left corner of the trackpad card (touchpad page only). */
+    private void updateSensChip() {
+        if (!showSensChip()) {
+            sensChipRect.setEmpty();
+            return;
+        }
+        float chipW = Ui.dp(getContext(), 92);
+        float chipH = Ui.dp(getContext(), 26);
+        float left = padRect.left + Ui.dp(getContext(), 10);
+        float top = padRect.top + Ui.dp(getContext(), 10);
+        sensChipRect.set(left, top, left + chipW, top + chipH);
+    }
+
+    private boolean showSensChip() {
+        return !compact && !padOnly && padRect.width() > Ui.dp(getContext(), 180)
+                && padRect.height() > Ui.dp(getContext(), 140);
+    }
+
+    private void drawSensChip(Canvas canvas) {
+        if (sensChipRect.isEmpty()) return;
+        canvas.drawRoundRect(sensChipRect, Ui.dp(getContext(), 13), Ui.dp(getContext(), 13), sensBgPaint);
+        canvas.drawRoundRect(sensChipRect, Ui.dp(getContext(), 13), Ui.dp(getContext(), 13), sensStrokePaint);
+        Ui.textCenter(canvas, "灵敏度 " + PointerSettings.speedLabel(getContext()),
+                sensChipRect.centerX(), sensChipRect.centerY() + Ui.dp(getContext(), 4), sensTextPaint);
     }
 
     private void drawKey(Canvas canvas, RectF rect, boolean pressed) {
@@ -242,6 +279,11 @@ public class ControlPadView extends View {
                 canvas.drawCircle(x, y, r, dot);
             }
         }
+    }
+
+    /** Opens the 「指针灵敏度」 dialog (debug hook + the chip tap both end up here). */
+    public void showSensitivityDialog() {
+        SensitivityDialog.show(getContext(), this::invalidate);
     }
 
     private void haptic() {
@@ -303,6 +345,11 @@ public class ControlPadView extends View {
                         invalidate();
                         return true;
                     }
+                }
+                if (!sensChipRect.isEmpty() && sensChipRect.contains(x, y)) {
+                    haptic();
+                    showSensitivityDialog();
+                    return true;
                 }
                 if (scrollUpRect.contains(x, y)) {
                     startScroll(1);
