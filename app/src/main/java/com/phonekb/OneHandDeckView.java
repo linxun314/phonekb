@@ -267,7 +267,7 @@ public class OneHandDeckView extends View {
                     float step = Ui.dp(getContext(), 18);
                     int steps = (int) (scrollAccum / step);
                     if (steps != 0) {
-                        hid.mouseWheel(-steps);
+                        hid.mouseWheel(steps);
                         scrollAccum -= steps * step;
                         moved = true;
                     }

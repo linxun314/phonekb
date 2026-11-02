@@ -283,7 +283,7 @@ public class TouchpadView extends View {
                         scrollAcc += step;
                     }
                     if (steps != 0) {
-                        hid.mouseWheel(-steps);
+                        hid.mouseWheel(steps);
                         scrolled = true;
                     }
                 }

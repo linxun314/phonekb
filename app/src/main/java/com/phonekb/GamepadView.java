@@ -1020,6 +1020,13 @@ public final class GamepadView extends View {
                 invalidate();
                 return true;
             }
+            if (tpOpen && !tpPanelRect.isEmpty() && tpMode != TP_PAD && e.getPointerCount() == 1
+                    && !tpPanelRect.contains(e.getX(), e.getY())) {
+                // Tapping outside the pad closes it (same as the keyboard page overlay). The tap is
+                // swallowed on purpose: otherwise the game key underneath would fire by accident.
+                setTouchpadOpen(false);
+                return true;
+            }
         }
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
             int index = e.getActionIndex();
@@ -1261,7 +1268,7 @@ public final class GamepadView extends View {
             if (steps != 0) {
                 tpScrollAcc -= steps * step;
                 tpScrolled = true;
-                if (hid != null) hid.mouseWheel(-steps);
+                if (hid != null) hid.mouseWheel(steps);
             }
             return;
         }

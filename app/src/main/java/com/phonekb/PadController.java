@@ -130,7 +130,7 @@ public final class PadController {
                         scrollAcc += step;
                     }
                     if (steps != 0) {
-                        hid.mouseWheel(-steps);
+                        hid.mouseWheel(steps);
                         scrolled = true;
                         moved = true;
                     }
