@@ -115,6 +115,8 @@ public final class GamepadView extends View {
     private boolean hatCompat;
     private int touchMode;
     private boolean touchMoveOnly;
+    private boolean haptics;
+    private final android.os.Vibrator vibrator;
     private final RectF touchRect = new RectF();
     private final RectF touchChipRect = new RectF();
     private boolean touchChipPressed;
@@ -154,6 +156,8 @@ public final class GamepadView extends View {
         if (hid != null) hid.setHatCompat(hatCompat);
         touchMode = clampTouchMode(prefs.getInt("gp_touch_mode", TOUCH_PANEL));
         touchMoveOnly = prefs.getBoolean("gp_touch_move_only", false);
+        haptics = prefs.getBoolean("gp_haptics", true);
+        vibrator = (android.os.Vibrator) c.getSystemService(Context.VIBRATOR_SERVICE);
         labelPaint = Ui.text(c, 20, Ui.TEXT);
         smallPaint = Ui.text(c, 12, Ui.TEXT);
         chipPaint = Ui.text(c, 11, Ui.TEXT);
@@ -178,6 +182,36 @@ public final class GamepadView extends View {
 
     private static float clampScale(float scale) {
         return Math.max(SCALE_MIN, Math.min(SCALE_MAX, scale));
+    }
+
+    public boolean isHaptics() {
+        return haptics;
+    }
+
+    public void setHaptics(boolean enabled) {
+        haptics = enabled;
+        prefs.edit().putBoolean("gp_haptics", enabled).apply();
+    }
+
+    /** Debug helper: three 60ms pulses so adb can verify the vibration actually fires. */
+    public void selfTestHaptics() {
+        for (int i = 0; i < 3; i++) {
+            postDelayed(() -> buzz(60), i * 300L);
+        }
+    }
+
+    /** Short vibration; does not depend on the system "touch vibration" switch like performHapticFeedback. */
+    private void buzz(int ms) {
+        if (!haptics || vibrator == null || !vibrator.hasVibrator()) return;
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                vibrator.vibrate(android.os.VibrationEffect.createOneShot(
+                        ms, android.os.VibrationEffect.DEFAULT_AMPLITUDE));
+            } else {
+                vibrator.vibrate(ms);
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     private static int clampTouchMode(int mode) {
@@ -741,12 +775,12 @@ public final class GamepadView extends View {
         int action = e.getActionMasked();
         if (action == MotionEvent.ACTION_DOWN) {
             if (chipRect.contains(e.getX(), e.getY())) {
-                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                buzz(10);
                 showSettingsDialog();
                 return true;
             }
             if (touchChipRect.contains(e.getX(), e.getY())) {
-                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                buzz(10);
                 touchChipPressed = true;
                 invalidate();
                 return true;
@@ -767,7 +801,7 @@ public final class GamepadView extends View {
                 if (!btn.pressed) {
                     btn.pressed = true;
                     mask |= btn.bit;
-                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                    buzz(10);
                     invalidate();
                     send();
                 }
@@ -804,7 +838,7 @@ public final class GamepadView extends View {
             if (touchChipPressed && action == MotionEvent.ACTION_UP) {
                 touchChipPressed = false;
                 cycleTouchMode();
-                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                buzz(10);
                 return true;
             }
             if (tpMode == TP_PAD && pointerId == tpPointerId) {
@@ -915,7 +949,7 @@ public final class GamepadView extends View {
     private void finishTouchPad() {
         long held = System.currentTimeMillis() - tpDownTime;
         if (!tpMoved && !tpScrolled && held < TAP_MAX_MS && !touchMoveOnly && hid != null) {
-            performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+            buzz(16);
             hid.mouseClick(tpMaxPointers >= 2 ? MOUSE_RIGHT : MOUSE_LEFT);
         }
         resetTouchPad();
@@ -951,7 +985,7 @@ public final class GamepadView extends View {
         if (hat < 0) hat += 8;
         if (hat != discHat) {
             setDiscHat(hat);
-            performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+            buzz(10);
             invalidate();
         }
     }
@@ -991,6 +1025,7 @@ public final class GamepadView extends View {
         final boolean originalCompat = hatCompat;
         final int originalTouch = touchMode;
         final boolean originalMoveOnly = touchMoveOnly;
+        final boolean originalHaptics = haptics;
 
         final boolean land = getResources().getConfiguration().orientation
                 == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
@@ -1041,6 +1076,14 @@ public final class GamepadView extends View {
         });
         addOption(box, ctx, "手柄页触控板", touchRow, land, land ? 7 : 14);
 
+        final boolean[] hapticHolder = {haptics};
+        LinearLayout hapticRow = segment(ctx, new String[]{"开", "关"}, haptics ? 0 : 1, which -> {
+            hapticHolder[0] = which == 0;
+            setHaptics(hapticHolder[0]);
+            if (hapticHolder[0]) buzz(12);
+        });
+        addOption(box, ctx, "震动反馈", hapticRow, land, land ? 7 : 12);
+
         final boolean[] moveHolder = {touchMoveOnly};
         LinearLayout moveRow = segment(ctx, new String[]{"完整", "只移动"}, touchMoveOnly ? 1 : 0, which -> {
             moveHolder[0] = which == 1;
@@ -1079,6 +1122,7 @@ public final class GamepadView extends View {
             setHatCompat(originalCompat);
             setTouchMode(originalTouch);
             setTouchMoveOnly(originalMoveOnly);
+            setHaptics(originalHaptics);
             dialog.dismiss();
         });
         TextView save = new TextView(ctx);
@@ -1094,6 +1138,7 @@ public final class GamepadView extends View {
             setHatCompat(compatHolder[0]);
             setTouchMode(touchHolder[0]);
             setTouchMoveOnly(moveHolder[0]);
+            setHaptics(hapticHolder[0]);
             dialog.dismiss();
         });
         LinearLayout.LayoutParams cancelLp = new LinearLayout.LayoutParams(

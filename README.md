@@ -190,7 +190,7 @@ PhoneKB 不传输画面，只把手机当外设，所以延迟低、被控端干
 ### 命令行（不装 Android Studio，Windows）
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools/build.ps1 -Clean -Module app -VersionName 0.21.0 -VersionCode 29
+powershell -ExecutionPolicy Bypass -File tools/build.ps1 -Clean -Module app -VersionName 0.21.1 -VersionCode 30
 powershell -ExecutionPolicy Bypass -File tools/build.ps1 -Clean -Module companion -VersionName 0.4.0 -VersionCode 4
 ```
 
