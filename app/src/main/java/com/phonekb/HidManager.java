@@ -419,8 +419,24 @@ public final class HidManager {
      * button lands four positions off on the host (A shows up as Y, the d-pad presses A/B/X, ...).
      */
     public void sendGamepad(int buttons) {
+        sendGamepadWithHat(buttons, hatFromButtons(buttons));
+    }
+
+    /**
+     * Gamepad report with an explicit hat value. The round movement disc sends the hat through
+     * this method so pressing a face button does not recentre the hat of a held disc direction
+     * (the plain {@link #sendGamepad(int)} derives the hat only from d-pad bits).
+     */
+    public void sendGamepadWithHat(int buttons, int hat) {
         byte[] r = new byte[3];
-        r[0] = (byte) hatFromButtons(buttons);
+        r[0] = (byte) (hat & 0x0F);
+        int mask = buttonMask(buttons);
+        r[1] = (byte) (mask & 0xFF);
+        r[2] = (byte) ((mask >> 8) & 0xFF);
+        send(HidConstants.REPORT_GAMEPAD, r);
+    }
+
+    private static int buttonMask(int buttons) {
         int mask = 0;
         if ((buttons & HidConstants.GP_A) != 0) mask |= 0x0001;      // button 1  -> BTN_GAMEPAD (A)
         if ((buttons & HidConstants.GP_B) != 0) mask |= 0x0002;      // button 2  -> BTN_EAST (B)
@@ -430,9 +446,7 @@ public final class HidManager {
         if ((buttons & HidConstants.GP_R1) != 0) mask |= 0x0080;     // button 8  -> BTN_TR (R1)
         if ((buttons & HidConstants.GP_SELECT) != 0) mask |= 0x0400; // button 11 -> BTN_SELECT
         if ((buttons & HidConstants.GP_START) != 0) mask |= 0x0800;  // button 12 -> BTN_START
-        r[1] = (byte) (mask & 0xFF);
-        r[2] = (byte) ((mask >> 8) & 0xFF);
-        send(HidConstants.REPORT_GAMEPAD, r);
+        return mask;
     }
 
     /** Debug helper: sends a raw hat switch value (0-7, 0x0F = centred) with no buttons. */
