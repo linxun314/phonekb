@@ -8,7 +8,10 @@ import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothProfile;
 import android.content.Context;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.Looper;
+import android.os.Process;
+import android.os.SystemClock;
 import android.os.SystemClock;
 import android.util.Log;
 
@@ -73,6 +76,13 @@ public final class HidManager {
     private final AtomicInteger pendDx = new AtomicInteger();
     private final AtomicInteger pendDy = new AtomicInteger();
     private final AtomicBoolean mouseFlushQueued = new AtomicBoolean(false);
+    /**
+     * The coalescing timer runs on its own thread. It used to be posted on the main looper, which
+     * meant a busy UI thread (drawing the page every frame) could push every flush back by a whole
+     * frame - that alone was up to ~16 ms of jitter on top of Bluetooth latency.
+     */
+    private volatile Handler mouseHandler;
+    private volatile long lastMouseFlushAt;
     /** Mouse moves inside this window are merged into one report (≈250 Hz ceiling). */
     private static final long MOUSE_FLUSH_MS = 4;
     private BluetoothAdapter adapter;
@@ -398,18 +408,45 @@ public final class HidManager {
      */
     public void mouseMove(int dx, int dy) {
         if (dx == 0 && dy == 0) return;
+        final long now = SystemClock.uptimeMillis();
+        if (now - lastMouseFlushAt >= MOUSE_FLUSH_MS) {
+            // Leading edge: the first move of a burst goes out right away instead of waiting for the
+            // merge window, so the pointer starts moving in the same frame the finger does.
+            lastMouseFlushAt = now;
+            dispatchMouse(dx, dy);
+            return;
+        }
         pendDx.addAndGet(dx);
         pendDy.addAndGet(dy);
         if (mouseFlushQueued.compareAndSet(false, true)) {
-            main.postDelayed(this::flushMouseMove, MOUSE_FLUSH_MS);
+            mouseHandler().postDelayed(this::flushMouseMove, MOUSE_FLUSH_MS);
+        }
+    }
+
+    private Handler mouseHandler() {
+        Handler h = mouseHandler;
+        if (h != null) return h;
+        synchronized (this) {
+            if (mouseHandler == null) {
+                HandlerThread t = new HandlerThread("phonekb-mouse-coalesce",
+                        Process.THREAD_PRIORITY_URGENT_DISPLAY);
+                t.start();
+                mouseHandler = new Handler(t.getLooper());
+            }
+            return mouseHandler;
         }
     }
 
     private void flushMouseMove() {
         mouseFlushQueued.set(false);
+        lastMouseFlushAt = SystemClock.uptimeMillis();
         final int dx0 = pendDx.getAndSet(0);
         final int dy0 = pendDy.getAndSet(0);
         if (dx0 == 0 && dy0 == 0) return;
+        dispatchMouse(dx0, dy0);
+    }
+
+    private void dispatchMouse(final int dx0, final int dy0) {
         final BluetoothDevice d = host;
         final BluetoothHidDevice h = hid;
         if (d == null || h == null || state != STATE_CONNECTED) return;

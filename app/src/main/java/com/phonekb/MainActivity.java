@@ -255,7 +255,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         footer = new TextView(this);
-        footer.setText("PhoneKB v0.22.0 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手 · 伴侣 WiFi");
+        footer.setText("PhoneKB v0.23.0 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手 · 伴侣 WiFi");
         footer.setTextColor(Ui.TEXT_DIM);
         footer.setTextSize(11);
         footer.setGravity(Gravity.CENTER);
@@ -1218,6 +1218,7 @@ public class MainActivity extends Activity {
                         + "触控板：单指滑动移动指针，单指点击=左键，双指点击=右键，双指上下滑=滚动，右侧 ↑↓ 按住连续滚动；左侧「数字」弹出数字键盘（输入密码），「键盘」弹出简易手机键盘（带数字行，数字也可用来选输入法的候选词），「菜单」等于平板菜单键。\n\n"
                         + "媒体：上一首 / 播放暂停 / 下一首、音量加减、静音、CC、返回 / 主页 / 菜单 / 电源。\n\n"
                         + "手柄：浮在屏幕边缘的手机式布局——左下方向盘（或圆盘），右下 X/Y/A/B，两侧中段 L1/R1，中间下方 SELECT/START。左上的「移动盘」按钮打开设置：移动盘「按键 / 圆盘」两种形态、「移动盘大小」和「按键大小」两个 60%–150% 的滑块（只缩放按键本身），以及「手柄页触控板」和「触控点击」。旁边的「触控」小键一键切换 关 / 中间 / 全屏：中间＝页面正中一块看得见边界的触控板；全屏＝除按键外整片空白都能触控（两侧留白不响应，防掌根误触）。触控板手势和「触控板」页一致：单指移动、轻点＝左键、双指点击＝右键、双指上下滑＝滚动；「只移动」档位下只移指针不点击。\n\n"
+                        + "手柄页触控板浮层：右上角的「触控板」小键点一下，右侧浮出一块触控板浮层（单指移动、轻点＝左键、双指点击＝右键、双指滑＝滚动），右下角竖排是 返回 / 主页 / 后台。点浮层里面的空白不会关掉它，左半屏的方向盘和 ABXY 照样能按；再点一次「触控板」收起。浮层左上角有个「⇔」把手：按住约 0.3 秒后左右拖动可以挪动整块浮层的位置，松手就记住，下次打开还在那儿。\n\n"
                         + "双手模式：左边是触控板，右边是按键板（从上到下：音量、媒体、返回 / 主页 / 后台、数字 / 键盘），左右手各管一半。双手页顶部有「互换」键：点一下把触控区和按键区对调（横屏左右对调，竖屏上下对调），方便左右手习惯不同的人；互换状态会记住。\n\n"
                         + "单手模式：右侧（或左侧）面板集中了大触控区和常用键；点「键盘」切成拇指键盘，点「切到遥控台」切回。\n\n"
                         + "竖屏：键盘页上半部分是触控区、下半部分是贴底的键盘（按键大小和普通手机键盘接近）；中间的分隔条可以上下拖动调整两区比例（拖到 48% / 58% / 62% 附近会吸附，双击分隔条恢复默认 58/42）。触控板页和媒体页的功能区也贴着屏幕底部，顶部分隔条可以拖动调整功能区高度（上方留空方便拇指操作，双击分隔条恢复默认：触控板页 80% / 媒体页 78%）；媒体页顶部还有「触控板」键，可以直接弹出触控板浮层；媒体页还多了「亮度 −/＋」两个键（调屏幕亮度，横屏时它们会移到媒体条左右两侧）。亮度键会先发蓝牙 HID；像 vivo 这类不响应亮度键的平板，请打开顶栏「伴侣」连上 WiFi，并在平板伴侣里授权「修改系统设置」，之后亮度键改走 WiFi 直接改平板系统亮度。数字键盘 / 键盘 / 触控板的浮层都从屏幕底部弹出。\n\n"
@@ -1401,6 +1402,13 @@ public class MainActivity extends Activity {
         }
         if (gamepadView != null && intent.getIntExtra("gpdialog", 0) == 1) {
             contentFrame.postDelayed(gamepadView::showSettingsDialog, 700);
+        }
+        // Debug/test hook: the floating touch pad overlay (adb cannot tap it) and its offset.
+        if (gamepadView != null && intent.hasExtra("gptp")) {
+            gamepadView.setTouchpadOpen(intent.getIntExtra("gptp", 0) == 1);
+        }
+        if (gamepadView != null && intent.hasExtra("gptpoff")) {
+            gamepadView.setTouchpadOffsetDp(intent.getIntExtra("gptpoff", 0));
         }
         // Debug/test hook: emit a fixed gamepad sequence so the host input events can be captured
         // with "adb shell getevent" (adb cannot tap the on-screen gamepad).

@@ -121,6 +121,34 @@ public final class GamepadView extends View {
     private final RectF touchChipRect = new RectF();
     private boolean touchChipPressed;
 
+    // v0.23: on-demand touch pad overlay - a floating panel on the right that the thumb can reach
+    // without letting go of the phone, opened from the 「触控板」 chip in the top-right corner.
+    private static final long HOLD_LONG_PRESS_MS = 260;
+    private static final float TP_PANEL_W_LAND_DP = 360f;
+    private static final float TP_PANEL_H_LAND_DP = 313f;
+    private static final float TP_PANEL_W_PORT_DP = 232f;
+    private static final float TP_PANEL_H_PORT_DP = 400f;
+    private final RectF tpChipRect = new RectF();
+    private boolean tpChipPressed;
+    private boolean tpOpen;
+    private float tpOffsetDp;
+    private final RectF tpPanelRect = new RectF();
+    private final RectF tpHandleRect = new RectF();
+    private final RectF[] tpNavRects = {new RectF(), new RectF(), new RectF()};
+    private final RectF tpScrollRect = new RectF();
+    private final RectF scratch = new RectF();
+    private boolean holdPressed;
+    private boolean holdDragging;
+    private float holdDownX;
+    private float holdStartOffsetDp;
+    private int navPressed = -1;
+    private final Runnable holdLongPress = () -> {
+        if (!holdPressed) return;
+        holdDragging = true;
+        buzz(14);
+        invalidate();
+    };
+
     // touch-pad gesture state (mirrors TouchpadView so both feel identical)
     private static final int TP_NONE = 0;
     private static final int TP_PAD = 1;
@@ -156,6 +184,7 @@ public final class GamepadView extends View {
         if (hid != null) hid.setHatCompat(hatCompat);
         touchMode = clampTouchMode(prefs.getInt("gp_touch_mode", TOUCH_PANEL));
         touchMoveOnly = prefs.getBoolean("gp_touch_move_only", false);
+        tpOffsetDp = prefs.getFloat("gp_tp_offset", 0f);
         haptics = prefs.getBoolean("gp_haptics", true);
         vibrator = (android.os.Vibrator) c.getSystemService(Context.VIBRATOR_SERVICE);
         labelPaint = Ui.text(c, 20, Ui.TEXT);
@@ -433,6 +462,12 @@ public final class GamepadView extends View {
         touchChipRect.set(chipRect.right + dp(8), chipRect.top,
                 chipRect.right + dp(8) + dp(84), chipRect.bottom);
 
+        // v0.23: the 「触控板」 chip sits in the top-right corner - one thumb slide from R1, so the
+        // right hand can open the floating touch pad without moving the grip.
+        float tpW = dp(82);
+        float tpChipTop = landscapeLayout ? (shoulderTop + sh + dp(10)) : dp(10);
+        tpChipRect.set(w - dp(e) - tpW, tpChipTop, w - dp(e), tpChipTop + dp(27));
+
         // --- select / start stay in the top band (portrait: right of the settings chip;
         //     landscape: between the shoulder keys) so they can never collide with the clusters.
         float mh = dp(27) * bs;
@@ -446,7 +481,7 @@ public final class GamepadView extends View {
             menuTop = (shoulderTop + sh / 2f) - mh / 2f;
         } else {
             leftBound = touchChipRect.right + dp(10);
-            rightBound = w - dp(e);
+            rightBound = tpChipRect.left - dp(10);
             menuTop = dp(10);
         }
         float space = Math.max(dp(60), rightBound - leftBound);
@@ -487,6 +522,45 @@ public final class GamepadView extends View {
         } else {
             touchRect.set(tpLeft, tpTop, tpRight, tpBottom);
         }
+
+        // --- floating touch pad overlay: right side by default, horizontally adjustable
+        if (!tpOpen) {
+            tpPanelRect.setEmpty();
+            tpHandleRect.setEmpty();
+            tpScrollRect.setEmpty();
+            for (int i = 0; i < 3; i++) tpNavRects[i].setEmpty();
+            return;
+        }
+        float pw = landscapeLayout ? Math.min(dp(TP_PANEL_W_LAND_DP), w * 0.42f)
+                : Math.min(dp(TP_PANEL_W_PORT_DP), w * 0.60f);
+        float ph = landscapeLayout ? Math.min(dp(TP_PANEL_H_LAND_DP), h - dp(150))
+                : Math.min(dp(TP_PANEL_H_PORT_DP), h * 0.55f);
+        // Landscape keeps ~112 dp free on the right so the ABXY cluster stays visible next to it;
+        // portrait keeps the pad narrow enough that the left thumb still owns the d-pad.
+        float panelRight = w - dp(landscapeLayout ? 128f : 40f) - dp(tpOffsetDp);
+        panelRight = Math.min(panelRight, w - dp(8));
+        panelRight = Math.max(panelRight, dp(8) + pw);
+        float panelLeft = panelRight - pw;
+        // Landscape: start below the touch-pad chip so the toggle never hides behind its own panel.
+        float panelTop = landscapeLayout ? Math.max(shoulderTop + sh + dp(14), tpChipRect.bottom + dp(12))
+                : (h - dp(66) - ph);
+        panelTop = Math.max(dp(56), Math.min(panelTop, h - dp(10) - ph));
+        tpPanelRect.set(panelLeft, panelTop, panelRight, panelTop + ph);
+
+        tpHandleRect.set(panelLeft + dp(10), panelTop + dp(10),
+                panelLeft + dp(32), panelTop + dp(32));
+        float colW = dp(52);
+        float colTop = panelTop + dp(44);
+        float navBlockH = dp(26) * 3 + dp(6) * 2;
+        float colBottom = panelTop + ph - dp(10) - navBlockH - dp(10);
+        tpScrollRect.set(panelRight - dp(10) - colW, colTop,
+                panelRight - dp(10), Math.max(colTop + dp(60), colBottom));
+        float navRight = panelRight - dp(10);
+        float navBottom = panelTop + ph - dp(10);
+        for (int i = 0; i < 3; i++) {
+            float top0 = navBottom - navBlockH + i * (dp(26) + dp(6));
+            tpNavRects[i].set(navRight - dp(78), top0, navRight, top0 + dp(26));
+        }
     }
 
     @Override
@@ -520,6 +594,8 @@ public final class GamepadView extends View {
         drawPill(canvas, r1, connected);
         drawPill(canvas, select, connected);
         drawPill(canvas, start, connected);
+        drawTouchpadChip(canvas, connected);
+        drawTouchpadOverlay(canvas, connected);
     }
 
     /** Draws the 「触控」 quick toggle (关 / 中间 / 全屏) right next to the settings chip. */
@@ -539,6 +615,132 @@ public final class GamepadView extends View {
         Ui.fitText(chipPaint, label, touchChipRect.width() - dp(14), dp(7));
         float ty = touchChipRect.centerY() - (chipPaint.descent() + chipPaint.ascent()) / 2f;
         canvas.drawText(label, touchChipRect.centerX(), ty, chipPaint);
+    }
+
+    /** The 「触控板」 chip in the top-right corner: toggles the floating touch pad overlay. */
+    private void drawTouchpadChip(Canvas canvas, boolean connected) {
+        fillPaint.setColor(tpChipPressed ? blend(Ui.SURFACE_2, Ui.ACCENT, 0.30f) : Ui.SURFACE_2);
+        canvas.drawRoundRect(tpChipRect, dp(12), dp(12), fillPaint);
+        edgePaint.setColor(Ui.ACCENT);
+        edgePaint.setStrokeWidth(dp(1.2f));
+        edgePaint.setAlpha(tpOpen ? 255 : 150);
+        canvas.drawRoundRect(tpChipRect, dp(12), dp(12), edgePaint);
+        edgePaint.setAlpha(255);
+        edgePaint.setStrokeWidth(dp(1.4f));
+        chipPaint.setColor(!connected ? Ui.TEXT_DIM : Ui.ACCENT);
+        chipPaint.setTextAlign(Paint.Align.CENTER);
+        String label = "触控板";
+        Ui.fitText(chipPaint, label, tpChipRect.width() - dp(14), dp(7));
+        float ty = tpChipRect.centerY() - (chipPaint.descent() + chipPaint.ascent()) / 2f;
+        canvas.drawText(label, tpChipRect.centerX(), ty, chipPaint);
+    }
+
+    /**
+     * The floating touch pad: stays on top of the thumb clusters, only covers ~45% of the width, and
+     * can be slid left/right with the grip in its top-left corner. Tapping outside does NOT close it,
+     * so the left thumb keeps steering while the right thumb moves the pointer.
+     */
+    private void drawTouchpadOverlay(Canvas canvas, boolean connected) {
+        if (!tpOpen || tpPanelRect.isEmpty()) return;
+
+        scratch.set(tpPanelRect);
+        scratch.offset(0f, dp(5));
+        fillPaint.setColor(0x55000000);
+        canvas.drawRoundRect(scratch, dp(20), dp(20), fillPaint);
+
+        fillPaint.setColor(blend(Ui.SURFACE, Ui.BG, 0.16f));
+        canvas.drawRoundRect(tpPanelRect, dp(20), dp(20), fillPaint);
+        edgePaint.setColor(holdDragging ? Ui.ACCENT : blend(Ui.SURFACE_2, Ui.TEXT, 0.22f));
+        edgePaint.setStrokeWidth(holdDragging ? dp(2f) : dp(1.2f));
+        canvas.drawRoundRect(tpPanelRect, dp(20), dp(20), edgePaint);
+        edgePaint.setStrokeWidth(dp(1.4f));
+
+        // grip (hold ~260 ms, then slide left/right; released position is remembered)
+        fillPaint.setColor(holdDragging ? Ui.ACCENT : Ui.SURFACE_2);
+        canvas.drawRoundRect(tpHandleRect, dp(7), dp(7), fillPaint);
+        iconPaint.setColor(holdDragging ? Ui.BG : Ui.TEXT_DIM);
+        iconPaint.setStrokeWidth(dp(1.6f));
+        float gx = tpHandleRect.centerX();
+        float gy = tpHandleRect.centerY();
+        Path arrow = new Path();
+        arrow.moveTo(gx - dp(6), gy);
+        arrow.lineTo(gx - dp(2.5f), gy - dp(3));
+        arrow.moveTo(gx - dp(6), gy);
+        arrow.lineTo(gx - dp(2.5f), gy + dp(3));
+        arrow.moveTo(gx + dp(6), gy);
+        arrow.lineTo(gx + dp(2.5f), gy - dp(3));
+        arrow.moveTo(gx + dp(6), gy);
+        arrow.lineTo(gx + dp(2.5f), gy + dp(3));
+        canvas.drawPath(arrow, iconPaint);
+
+        smallPaint.setTextAlign(Paint.Align.LEFT);
+        smallPaint.setTextSize(dp(11f));
+        smallPaint.setColor(Ui.TEXT_DIM);
+        canvas.drawText("触控板", tpHandleRect.right + dp(8),
+                gy - (smallPaint.descent() + smallPaint.ascent()) / 2f, smallPaint);
+
+        if (holdDragging) {
+            smallPaint.setTextAlign(Paint.Align.CENTER);
+            smallPaint.setTextSize(dp(11f));
+            smallPaint.setColor(Ui.ACCENT);
+            canvas.drawText("左右拖动 · 松手保存",
+                    tpPanelRect.centerX(), tpHandleRect.centerY() + dp(4), smallPaint);
+        }
+
+        // scroll column (kept short so it never runs into the nav stack)
+        if (!tpScrollRect.isEmpty()) {
+            fillPaint.setColor(blend(Ui.SURFACE, Ui.SURFACE_2, 0.75f));
+            canvas.drawRoundRect(tpScrollRect, dp(12), dp(12), fillPaint);
+            iconPaint.setColor(Ui.TEXT_DIM);
+            iconPaint.setStrokeWidth(dp(2f));
+            float cx = tpScrollRect.centerX();
+            float upY = tpScrollRect.top + dp(20);
+            float downY = tpScrollRect.bottom - dp(20);
+            Path chev = new Path();
+            chev.moveTo(cx - dp(7), upY + dp(4));
+            chev.lineTo(cx, upY);
+            chev.lineTo(cx + dp(7), upY + dp(4));
+            canvas.drawPath(chev, iconPaint);
+            Path chev2 = new Path();
+            chev2.moveTo(cx - dp(7), downY - dp(4));
+            chev2.lineTo(cx, downY);
+            chev2.lineTo(cx + dp(7), downY - dp(4));
+            canvas.drawPath(chev2, iconPaint);
+        }
+
+        // back / home / recents stacked vertically in the bottom-right corner
+        String[] navLabels = {"返回", "主页", "后台"};
+        for (int i = 0; i < 3; i++) {
+            RectF r = tpNavRects[i];
+            if (r.isEmpty()) continue;
+            boolean pressed = navPressed == i;
+            fillPaint.setColor(pressed ? blend(Ui.SURFACE_2, Ui.ACCENT, 0.35f) : blend(Ui.SURFACE, Ui.KEY, 0.85f));
+            canvas.drawRoundRect(r, dp(9), dp(9), fillPaint);
+            smallPaint.setTextAlign(Paint.Align.CENTER);
+            smallPaint.setTextSize(dp(11f));
+            smallPaint.setColor(pressed ? Ui.ACCENT : Ui.TEXT);
+            float ty = r.centerY() - (smallPaint.descent() + smallPaint.ascent()) / 2f;
+            canvas.drawText(navLabels[i], r.centerX(), ty, smallPaint);
+        }
+
+        // centre ring + hints
+        float ccx = tpPanelRect.centerX() - dp(18);
+        float ccy = tpPanelRect.centerY() - dp(6);
+        edgePaint.setColor(blend(Ui.BG, Ui.TEXT, 0.45f));
+        canvas.drawCircle(ccx, ccy, dp(8), edgePaint);
+        fillPaint.setColor(Ui.TEXT_DIM);
+        canvas.drawCircle(ccx, ccy, dp(2.6f), fillPaint);
+
+        smallPaint.setTextAlign(Paint.Align.CENTER);
+        smallPaint.setTextSize(dp(12.5f));
+        smallPaint.setColor(Ui.TEXT_DIM);
+        canvas.drawText("触控区", ccx, ccy + dp(24), smallPaint);
+        smallPaint.setTextSize(dp(9.5f));
+        String hint = touchMoveOnly
+                ? "单指移动 · 双指滑＝滚动"
+                : "单指移动 · 轻点＝左键 · 双指点击＝右键";
+        Ui.fitText(smallPaint, hint, tpPanelRect.width() - dp(96), dp(7));
+        canvas.drawText(hint, ccx, ccy + dp(40), smallPaint);
     }
 
     /** Paints the touch pad: a visible panel in the middle, or a faint hint over the empty area. */
@@ -812,14 +1014,45 @@ public final class GamepadView extends View {
                 invalidate();
                 return true;
             }
+            if (tpChipRect.contains(e.getX(), e.getY())) {
+                buzz(10);
+                tpChipPressed = true;
+                invalidate();
+                return true;
+            }
         }
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
             int index = e.getActionIndex();
             float x = e.getX(index);
             float y = e.getY(index);
+            if (tpOpen && !tpPanelRect.isEmpty() && e.getPointerCount() == 1) {
+                if (tpHandleRect.contains(x, y)) {
+                    // Long press to grab the grip, then slide left/right; the node is saved on release.
+                    holdPressed = true;
+                    holdDragging = false;
+                    holdDownX = x;
+                    holdStartOffsetDp = tpOffsetDp;
+                    removeCallbacks(holdLongPress);
+                    postDelayed(holdLongPress, HOLD_LONG_PRESS_MS);
+                    return true;
+                }
+                for (int i = 0; i < 3; i++) {
+                    if (tpNavRects[i].contains(x, y)) {
+                        navPressed = i;
+                        buzz(8);
+                        invalidate();
+                        return true;
+                    }
+                }
+            }
             if (padType == PAD_DISC && inDisc(x, y)) {
                 discPointer = e.getPointerId(index);
                 updateDisc(x, y);
+                return true;
+            }
+            if (tpOpen && tpPanelRect.contains(x, y)) {
+                // Overlay wins over whatever sits underneath it (it can overlap ABXY at high sizes).
+                startTouchPad(e, index);
                 return true;
             }
             Btn btn = hit(x, y);
@@ -850,6 +1083,11 @@ public final class GamepadView extends View {
             return true;
         }
         if (action == MotionEvent.ACTION_MOVE) {
+            if (holdPressed && holdDragging) {
+                tpOffsetDp = holdStartOffsetDp + (e.getX() - holdDownX) / dp(1f);
+                invalidate();
+                return true;
+            }
             if (tpMode == TP_PAD) {
                 handleTouchPadMove(e);
                 return true;
@@ -862,6 +1100,31 @@ public final class GamepadView extends View {
         }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP) {
             int pointerId = e.getPointerId(e.getActionIndex());
+            if (tpChipPressed && action == MotionEvent.ACTION_UP) {
+                tpChipPressed = false;
+                setTouchpadOpen(!tpOpen);
+                buzz(10);
+                return true;
+            }
+            if (holdPressed && action == MotionEvent.ACTION_UP) {
+                removeCallbacks(holdLongPress);
+                boolean dragged = holdDragging;
+                holdPressed = false;
+                holdDragging = false;
+                if (dragged) {
+                    prefs.edit().putFloat("gp_tp_offset", tpOffsetDp).apply();
+                    buzz(10);
+                }
+                invalidate();
+                return true;
+            }
+            if (navPressed >= 0 && action == MotionEvent.ACTION_UP) {
+                int which = navPressed;
+                navPressed = -1;
+                performNav(which);
+                invalidate();
+                return true;
+            }
             if (touchChipPressed && action == MotionEvent.ACTION_UP) {
                 touchChipPressed = false;
                 cycleTouchMode();
@@ -903,6 +1166,11 @@ public final class GamepadView extends View {
             }
             resetTouchPad();
             touchChipPressed = false;
+            tpChipPressed = false;
+            navPressed = -1;
+            removeCallbacks(holdLongPress);
+            holdPressed = false;
+            holdDragging = false;
             invalidate();
             send();
             return true;
@@ -911,6 +1179,47 @@ public final class GamepadView extends View {
     }
 
     // -------------------------------------------------------------- touch pad
+
+    // ------------------------------------------------------- touch pad overlay
+
+    /** Opens / closes the floating touch pad overlay (remembered per session, not persisted). */
+    public void setTouchpadOpen(boolean open) {
+        if (tpOpen == open) return;
+        tpOpen = open;
+        navPressed = -1;
+        holdPressed = false;
+        holdDragging = false;
+        removeCallbacks(holdLongPress);
+        resetTouchPad();
+        layout();
+        invalidate();
+    }
+
+    public boolean isTouchpadOpen() {
+        return tpOpen;
+    }
+
+    /** Horizontal offset of the overlay in dp; positive moves it further away from the right edge. */
+    public void setTouchpadOffsetDp(float dpOffset) {
+        tpOffsetDp = dpOffset;
+        layout();
+        invalidate();
+    }
+
+    private void performNav(int which) {
+        if (hid == null) {
+            buzz(10);
+            return;
+        }
+        buzz(10);
+        if (which == 0) {
+            hid.tapConsumer(HidConstants.CONSUMER_AC_BACK);
+        } else if (which == 1) {
+            hid.tapConsumer(HidConstants.CONSUMER_AC_HOME);
+        } else {
+            hid.tapCombo(HidConstants.MOD_LEFT_GUI, HidConstants.KEY_TAB);
+        }
+    }
 
     private boolean inTouchArea(float x, float y) {
         if (touchMode == TOUCH_PANEL) return touchRect.contains(x, y);
@@ -955,10 +1264,23 @@ public final class GamepadView extends View {
             return;
         }
         tpMaxPointers = Math.max(tpMaxPointers, 1);
+        // Replay every sample the system batched into this event: using only the last point makes
+        // fast flicks undershoot (the in-between movement is simply lost).
+        float px = tpLastX;
+        float py = tpLastY;
+        int hist = e.getHistorySize();
+        for (int i = 0; i < hist; i++) {
+            float hx = e.getHistoricalX(idx, i);
+            float hy = e.getHistoricalY(idx, i);
+            tpAccumX += (hx - px) * POINTER_SPEED;
+            tpAccumY += (hy - py) * POINTER_SPEED;
+            px = hx;
+            py = hy;
+        }
         float x = e.getX(idx);
         float y = e.getY(idx);
-        tpAccumX += (x - tpLastX) * POINTER_SPEED;
-        tpAccumY += (y - tpLastY) * POINTER_SPEED;
+        tpAccumX += (x - px) * POINTER_SPEED;
+        tpAccumY += (y - py) * POINTER_SPEED;
         tpLastX = x;
         tpLastY = y;
         int dx = (int) tpAccumX;

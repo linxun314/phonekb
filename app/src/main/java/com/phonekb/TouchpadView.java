@@ -238,10 +238,23 @@ public class TouchpadView extends View {
                 if (mode != MODE_PAD) return true;
                 int count = e.getPointerCount();
                 if (count == 1) {
+                    // Replay every sample the system batched into this event, not just the last
+                    // one: dropping the in-between points is what makes fast flicks undershoot.
+                    float px = lastX;
+                    float py = lastY;
+                    int hist = e.getHistorySize();
+                    for (int i = 0; i < hist; i++) {
+                        float hx = e.getHistoricalX(0, i);
+                        float hy = e.getHistoricalY(0, i);
+                        accumX += (hx - px) * POINTER_SPEED;
+                        accumY += (hy - py) * POINTER_SPEED;
+                        px = hx;
+                        py = hy;
+                    }
                     float x = e.getX();
                     float y = e.getY();
-                    accumX += (x - lastX) * POINTER_SPEED;
-                    accumY += (y - lastY) * POINTER_SPEED;
+                    accumX += (x - px) * POINTER_SPEED;
+                    accumY += (y - py) * POINTER_SPEED;
                     lastX = x;
                     lastY = y;
                     int dx = (int) accumX;
