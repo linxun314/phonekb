@@ -14,6 +14,8 @@ import android.util.Log;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Owns the Android Bluetooth HID device (peripheral) profile and sends input reports.
@@ -26,6 +28,8 @@ import java.util.concurrent.Executors;
  */
 public final class HidManager {
     private static final String TAG = "PhoneKB-HID";
+    /** Set to true only while debugging: per-report logging costs latency. */
+    private static final boolean DEBUG = false;
 
     private static volatile HidManager instance;
 
@@ -56,6 +60,21 @@ public final class HidManager {
     private final Context context;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService btExecutor = Executors.newSingleThreadExecutor();
+    /**
+     * Every input report is pushed from this single thread instead of the caller (UI) thread, so a
+     * slow Bluetooth stack call can never stall touch dispatch. Threads are created at max priority
+     * to shave scheduling latency off each report.
+     */
+    private final ExecutorService sendExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "phonekb-hid-send");
+        t.setPriority(Thread.MAX_PRIORITY);
+        return t;
+    });
+    private final AtomicInteger pendDx = new AtomicInteger();
+    private final AtomicInteger pendDy = new AtomicInteger();
+    private final AtomicBoolean mouseFlushQueued = new AtomicBoolean(false);
+    /** Mouse moves inside this window are merged into one report (≈250 Hz ceiling). */
+    private static final long MOUSE_FLUSH_MS = 4;
     private BluetoothAdapter adapter;
     private BluetoothHidDevice hid;
     private volatile BluetoothDevice host;
@@ -316,18 +335,19 @@ public final class HidManager {
             }
             return false;
         }
-        boolean ok = false;
-        try {
-            ok = h.sendReport(d, reportId, data);
-        } catch (Exception e) {
-            Log.w(TAG, "sendReport failed", e);
-        }
+        sendExecutor.execute(() -> {
+            try {
+                h.sendReport(d, reportId, data);
+            } catch (Exception e) {
+                Log.w(TAG, "sendReport failed", e);
+            }
+        });
         long now = SystemClock.uptimeMillis();
-        if (reportId != HidConstants.REPORT_MOUSE || now - lastSendLogAt > 1000) {
+        if (DEBUG && now - lastSendLogAt > 1000) {
             lastSendLogAt = now;
-            Log.i(TAG, "send id=" + reportId + " len=" + data.length + " ok=" + ok + " host=" + nameOf(d));
+            Log.i(TAG, "send id=" + reportId + " len=" + data.length + " host=" + nameOf(d));
         }
-        return ok;
+        return true;
     }
 
     // ---------------------------------------------------------------- keyboard
@@ -368,18 +388,49 @@ public final class HidManager {
         main.postDelayed(() -> mouseButtons(0), 30);
     }
 
+    /**
+     * Queues a relative pointer move.
+     *
+     * <p>Deltas are accumulated and flushed at most every {@link #MOUSE_FLUSH_MS} ms. Touch screens
+     * deliver moves in bursts (up to 240 Hz); sending one report per event let the Bluetooth stack
+     * queue them up, which is what made the cursor lag behind the finger. Merging them keeps the
+     * report count below what the link can carry, so the newest position is what the host sees.
+     */
     public void mouseMove(int dx, int dy) {
         if (dx == 0 && dy == 0) return;
-        while (dx != 0 || dy != 0) {
-            int sx = clamp(dx);
-            int sy = clamp(dy);
-            byte[] r = new byte[4];
-            r[1] = (byte) sx;
-            r[2] = (byte) sy;
-            send(HidConstants.REPORT_MOUSE, r);
-            dx -= sx;
-            dy -= sy;
+        pendDx.addAndGet(dx);
+        pendDy.addAndGet(dy);
+        if (mouseFlushQueued.compareAndSet(false, true)) {
+            main.postDelayed(this::flushMouseMove, MOUSE_FLUSH_MS);
         }
+    }
+
+    private void flushMouseMove() {
+        mouseFlushQueued.set(false);
+        final int dx0 = pendDx.getAndSet(0);
+        final int dy0 = pendDy.getAndSet(0);
+        if (dx0 == 0 && dy0 == 0) return;
+        final BluetoothDevice d = host;
+        final BluetoothHidDevice h = hid;
+        if (d == null || h == null || state != STATE_CONNECTED) return;
+        sendExecutor.execute(() -> {
+            int dx = dx0;
+            int dy = dy0;
+            try {
+                while (dx != 0 || dy != 0) {
+                    int sx = clamp(dx);
+                    int sy = clamp(dy);
+                    byte[] r = new byte[4];
+                    r[1] = (byte) sx;
+                    r[2] = (byte) sy;
+                    h.sendReport(d, HidConstants.REPORT_MOUSE, r);
+                    dx -= sx;
+                    dy -= sy;
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "mouse flush failed", e);
+            }
+        });
     }
 
     public void mouseWheel(int steps) {

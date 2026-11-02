@@ -373,11 +373,14 @@ public final class GamepadView extends View {
         }
 
         // --- movement pad (bottom-left thumb zone)
+        // Xbox-style: the two thumb clusters are pulled inwards (not glued to the corners) and sit
+        // on the same baseline, which leaves a usable touch panel between them.
+        float clusterInset = dp(landscapeLayout ? 40f : 0f);
         float s = padBaseDp * ps * unit;
         float arm = s * 0.93f;
         padHalf = arm + s / 2f;
-        padCx = dp(e) + padHalf;
-        padCy = h - dp(be) - padHalf;
+        padCx = dp(e) + padHalf + clusterInset;
+        padCy = h - dp(landscapeLayout ? 34f : 52f) - padHalf;
 
         float discR = padHalf * 0.98f;
         discRect.set(padCx - discR, padCy - discR, padCx + discR, padCy + discR);
@@ -393,13 +396,16 @@ public final class GamepadView extends View {
         float r = rBaseDp * bs * unit;
         float off = r * 1.48f;
         float faceHalf = off + r;
-        float faceCx = w - dp(e) - faceHalf;
-        float faceCy = h - dp(e) - faceHalf;
+        float faceCx = w - dp(e) - faceHalf - clusterInset;
+        float faceCy = padCy;
         y.rect.set(faceCx - r, faceCy - off - r, faceCx + r, faceCy - off + r);
         x.rect.set(faceCx - off - r, faceCy - r, faceCx - off + r, faceCy + r);
         b.rect.set(faceCx + off - r, faceCy - r, faceCx + off + r, faceCy + r);
         a.rect.set(faceCx - r, faceCy + off - r, faceCx + r, faceCy + off + r);
-        for (Btn btn : new Btn[]{x, y, a, b}) btn.radius = r;
+        x.radius = r;
+        y.radius = r;
+        a.radius = r;
+        b.radius = r;
 
         // --- shoulder keys: mid sides in portrait (thumb reach), top row in landscape
         float sw = dp(96) * bs;
@@ -455,15 +461,26 @@ public final class GamepadView extends View {
         float tpRight;
         float tpBottom;
         if (landscapeLayout) {
-            tpLeft = dp(e) + sw + dp(16);
-            tpRight = w - dp(e) - sw - dp(16);
-            tpTop = shoulderTop + sh + dp(10);
-            tpBottom = Math.min(padCy - padHalf, faceCy - faceHalf) - dp(14);
+            float gapLeft = padCx + padHalf + dp(28);
+            float gapRight = faceCx - faceHalf - dp(28);
+            float maxW = Math.max(dp(120), gapRight - gapLeft);
+            float pw = Math.min(Math.min(w * 0.40f, dp(352)), maxW);
+            float ph = Math.min(dp(190), hDp * 0.58f * unit);
+            float cx = (gapLeft + gapRight) / 2f;
+            float cy = dp(56) + sh + ph / 2f;
+            tpLeft = cx - pw / 2f;
+            tpRight = cx + pw / 2f;
+            tpTop = cy - ph / 2f;
+            tpBottom = cy + ph / 2f;
         } else {
             tpLeft = dp(e);
             tpRight = w - dp(e);
-            tpTop = select.rect.bottom + dp(12);
-            tpBottom = shoulderTop - dp(10);
+            float availTop = select.rect.bottom + dp(14);
+            float availBottom = shoulderTop - dp(14);
+            float ph = Math.min(dp(320), availBottom - availTop);
+            ph = Math.max(dp(140), ph);
+            tpTop = availTop + Math.max(0f, (availBottom - availTop - ph) / 2f);
+            tpBottom = tpTop + ph;
         }
         if (tpRight - tpLeft < dp(80) || tpBottom - tpTop < dp(60)) {
             touchRect.setEmpty();
@@ -490,10 +507,19 @@ public final class GamepadView extends View {
         if (padType == PAD_DISC) {
             drawDisc(canvas, connected);
         } else {
-            for (Btn btn : new Btn[]{up, down, left, right}) drawDpadKey(canvas, btn, connected);
+            drawDpadKey(canvas, up, connected);
+            drawDpadKey(canvas, down, connected);
+            drawDpadKey(canvas, left, connected);
+            drawDpadKey(canvas, right, connected);
         }
-        for (Btn btn : new Btn[]{x, y, a, b}) drawFace(canvas, btn, connected);
-        for (Btn btn : new Btn[]{l1, r1, select, start}) drawPill(canvas, btn, connected);
+        drawFace(canvas, x, connected);
+        drawFace(canvas, y, connected);
+        drawFace(canvas, a, connected);
+        drawFace(canvas, b, connected);
+        drawPill(canvas, l1, connected);
+        drawPill(canvas, r1, connected);
+        drawPill(canvas, select, connected);
+        drawPill(canvas, start, connected);
     }
 
     /** Draws the 「触控」 quick toggle (关 / 中间 / 全屏) right next to the settings chip. */
@@ -639,12 +665,13 @@ public final class GamepadView extends View {
         smallPaint.setColor(discHat == HAT_NEUTRAL || !connected ? Ui.TEXT_DIM : Ui.ACCENT);
         String hint = discHat == HAT_NEUTRAL ? "按住滑动换方向" : "当前：" + DIR_NAMES[discHat];
         if (landscapeLayout) {
-            // Landscape is short: put the hint to the right of the pad (there is plenty of empty
-            // space between the two thumb clusters) instead of above it where L1 sits.
-            smallPaint.setTextAlign(Paint.Align.LEFT);
-            Ui.fitText(smallPaint, hint, dp(150), dp(7));
-            float ty = cy - (smallPaint.descent() + smallPaint.ascent()) / 2f;
-            canvas.drawText(hint, cx + r + dp(14), ty, smallPaint);
+            // Landscape is short: put the hint under the pad. Above it sits L1, to the right the
+            // touch panel, so below the disc is the only free spot.
+            smallPaint.setTextAlign(Paint.Align.CENTER);
+            Ui.fitText(smallPaint, hint, r * 2.2f, dp(7));
+            float hintY = cy + r + dp(14);
+            if (hintY > getHeight() - dp(4)) hintY = cy - r - dp(8);
+            canvas.drawText(hint, cx, hintY, smallPaint);
         } else {
             smallPaint.setTextAlign(Paint.Align.CENTER);
             Ui.fitText(smallPaint, hint, r * 1.9f, dp(7));
