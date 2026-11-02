@@ -126,6 +126,13 @@ public final class GamepadView extends View {
     private static final long HOLD_LONG_PRESS_MS = 260;
     private static final float TP_PANEL_W_LAND_DP = 392f;
     private static final float TP_PANEL_H_LAND_DP = 420f;
+    // The scroll column and the nav stack share the right edge. The nav keys are what a thumb
+    // reaches for most, so they are tall and the scroll column is only a short stub above them.
+    private static final float TP_SCROLL_W_DP = 52f;
+    private static final float TP_SCROLL_H_DP = 104f;
+    private static final float TP_NAV_W_DP = 78f;
+    private static final float TP_NAV_H_DP = 34f;
+    private static final float TP_NAV_GAP_DP = 8f;
     private static final float TP_PANEL_W_PORT_DP = 232f;
     private static final float TP_PANEL_H_PORT_DP = 400f;
     private final RectF tpChipRect = new RectF();
@@ -558,17 +565,18 @@ public final class GamepadView extends View {
 
         tpHandleRect.set(panelLeft + dp(10), panelTop + dp(10),
                 panelLeft + dp(32), panelTop + dp(32));
-        float colW = dp(52);
+        float colW = dp(TP_SCROLL_W_DP);
         float colTop = panelTop + dp(44);
-        float navBlockH = dp(26) * 3 + dp(6) * 2;
-        float colBottom = panelTop + ph - dp(10) - navBlockH - dp(10);
         tpScrollRect.set(panelRight - dp(10) - colW, colTop,
-                panelRight - dp(10), Math.max(colTop + dp(60), colBottom));
+                panelRight - dp(10), colTop + dp(TP_SCROLL_H_DP));
+        float navH = dp(TP_NAV_H_DP);
+        float navGap = dp(TP_NAV_GAP_DP);
+        float navBlockH = navH * 3 + navGap * 2;
         float navRight = panelRight - dp(10);
         float navBottom = panelTop + ph - dp(10);
         for (int i = 0; i < 3; i++) {
-            float top0 = navBottom - navBlockH + i * (dp(26) + dp(6));
-            tpNavRects[i].set(navRight - dp(78), top0, navRight, top0 + dp(26));
+            float top0 = navBottom - navBlockH + i * (navH + navGap);
+            tpNavRects[i].set(navRight - dp(TP_NAV_W_DP), top0, navRight, top0 + navH);
         }
     }
 
@@ -726,7 +734,7 @@ public final class GamepadView extends View {
             fillPaint.setColor(pressed ? blend(Ui.SURFACE_2, Ui.ACCENT, 0.35f) : blend(Ui.SURFACE, Ui.KEY, 0.85f));
             canvas.drawRoundRect(r, dp(9), dp(9), fillPaint);
             smallPaint.setTextAlign(Paint.Align.CENTER);
-            smallPaint.setTextSize(dp(11f));
+            smallPaint.setTextSize(dp(13f));
             smallPaint.setColor(pressed ? Ui.ACCENT : Ui.TEXT);
             float ty = r.centerY() - (smallPaint.descent() + smallPaint.ascent()) / 2f;
             canvas.drawText(navLabels[i], r.centerX(), ty, smallPaint);
