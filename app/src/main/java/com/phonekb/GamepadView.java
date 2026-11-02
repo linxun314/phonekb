@@ -48,6 +48,16 @@ public final class GamepadView extends View {
     private static final float SCALE_DEFAULT = 1.00f;
     private static final int SCALE_STEPS = 90;
 
+    /** Gamepad page touch-pad placement: off / one visible panel in the middle / the whole empty area. */
+    public static final int TOUCH_OFF = 0;
+    public static final int TOUCH_PANEL = 1;
+    public static final int TOUCH_FULL = 2;
+
+    private static final int MOUSE_LEFT = 1;
+    private static final int MOUSE_RIGHT = 2;
+    private static final float POINTER_SPEED = 1.7f;
+    private static final long TAP_MAX_MS = 220;
+
     private static final int HAT_NEUTRAL = 0x0F;
     private static final String[] DIR_NAMES = {"上", "右上", "右", "右下", "下", "左下", "左", "左上"};
 
@@ -78,6 +88,7 @@ public final class GamepadView extends View {
     private final Paint smallPaint;
     private final Paint chipPaint;
     private final Paint discStroke;
+    private final Paint edgePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     private final Btn up = new Btn(HidConstants.GP_UP, KIND_DPAD, "", Ui.KEY, Ui.TEXT);
     private final Btn down = new Btn(HidConstants.GP_DOWN, KIND_DPAD, "", Ui.KEY, Ui.TEXT);
@@ -102,6 +113,29 @@ public final class GamepadView extends View {
     private float padScale;
     private float btnScale;
     private boolean hatCompat;
+    private int touchMode;
+    private boolean touchMoveOnly;
+    private final RectF touchRect = new RectF();
+    private final RectF touchChipRect = new RectF();
+    private boolean touchChipPressed;
+
+    // touch-pad gesture state (mirrors TouchpadView so both feel identical)
+    private static final int TP_NONE = 0;
+    private static final int TP_PAD = 1;
+    private int tpMode = TP_NONE;
+    private int tpPointerId = -1;
+    private boolean tpMoved;
+    private boolean tpScrolled;
+    private int tpMaxPointers;
+    private float tpLastX;
+    private float tpLastY;
+    private float tpDownX;
+    private float tpDownY;
+    private float tpAccumX;
+    private float tpAccumY;
+    private float tpScrollAcc;
+    private float tpLastScrollY;
+    private long tpDownTime;
     private int discHat = HAT_NEUTRAL;
     private int discPointer = -1;
     private boolean landscapeLayout;
@@ -118,6 +152,8 @@ public final class GamepadView extends View {
         btnScale = clampScale(prefs.getFloat("gp_btn_scale", SCALE_DEFAULT));
         hatCompat = prefs.getBoolean("gp_hat_compat", false);
         if (hid != null) hid.setHatCompat(hatCompat);
+        touchMode = clampTouchMode(prefs.getInt("gp_touch_mode", TOUCH_PANEL));
+        touchMoveOnly = prefs.getBoolean("gp_touch_move_only", false);
         labelPaint = Ui.text(c, 20, Ui.TEXT);
         smallPaint = Ui.text(c, 12, Ui.TEXT);
         chipPaint = Ui.text(c, 11, Ui.TEXT);
@@ -128,6 +164,8 @@ public final class GamepadView extends View {
         discStroke.setStyle(Paint.Style.STROKE);
         discStroke.setColor(blend(Ui.KEY, Ui.TEXT, 0.10f));
         discStroke.setStrokeWidth(dp(1.2f));
+        edgePaint.setStyle(Paint.Style.STROKE);
+        edgePaint.setStrokeWidth(dp(1.2f));
     }
 
     private float dp(float v) {
@@ -140,6 +178,15 @@ public final class GamepadView extends View {
 
     private static float clampScale(float scale) {
         return Math.max(SCALE_MIN, Math.min(SCALE_MAX, scale));
+    }
+
+    private static int clampTouchMode(int mode) {
+        return mode == TOUCH_FULL ? TOUCH_FULL : (mode == TOUCH_OFF ? TOUCH_OFF : TOUCH_PANEL);
+    }
+
+    private static String touchModeLabel(int mode) {
+        if (mode == TOUCH_OFF) return "关";
+        return mode == TOUCH_FULL ? "全屏" : "中间";
     }
 
     // ------------------------------------------------------------- public API
@@ -175,6 +222,36 @@ public final class GamepadView extends View {
         invalidate();
     }
 
+    public int getTouchMode() {
+        return touchMode;
+    }
+
+    public void setTouchMode(int mode) {
+        int next = clampTouchMode(mode);
+        if (next == touchMode) return;
+        touchMode = next;
+        prefs.edit().putInt("gp_touch_mode", touchMode).apply();
+        resetTouchPad();
+        invalidate();
+    }
+
+    /** Cycles 关 → 中间 → 全屏 → 关 with the small 「触控」 chip in the top bar. */
+    public void cycleTouchMode() {
+        int next = touchMode == TOUCH_OFF ? TOUCH_PANEL : (touchMode == TOUCH_PANEL ? TOUCH_FULL : TOUCH_OFF);
+        setTouchMode(next);
+    }
+
+    public boolean isTouchMoveOnly() {
+        return touchMoveOnly;
+    }
+
+    public void setTouchMoveOnly(boolean enabled) {
+        touchMoveOnly = enabled;
+        prefs.edit().putBoolean("gp_touch_move_only", enabled).apply();
+        resetTouchPad();
+        invalidate();
+    }
+
     /** Size factor of the movement pad itself (0.6 - 1.5), independent of the page layout. */
     public float getPadScale() {
         return padScale;
@@ -201,7 +278,18 @@ public final class GamepadView extends View {
         invalidate();
     }
 
+    private void resetTouchPad() {
+        tpMode = TP_NONE;
+        tpMoved = false;
+        tpScrolled = false;
+        tpMaxPointers = 0;
+        tpAccumX = 0f;
+        tpAccumY = 0f;
+        tpScrollAcc = 0f;
+    }
+
     private void resetInput() {
+        resetTouchPad();
         pointers.clear();
         mask = 0;
         for (Btn btn : all) btn.pressed = false;
@@ -301,6 +389,10 @@ public final class GamepadView extends View {
             chipRect.set(chipLeft, chipTop, chipLeft + dp(78), chipTop + dp(27));
         }
 
+        // The 「触控」 quick toggle sits right next to the settings chip in both orientations.
+        touchChipRect.set(chipRect.right + dp(8), chipRect.top,
+                chipRect.right + dp(8) + dp(84), chipRect.bottom);
+
         // --- select / start stay in the top band (portrait: right of the settings chip;
         //     landscape: between the shoulder keys) so they can never collide with the clusters.
         float mh = dp(27) * bs;
@@ -313,7 +405,7 @@ public final class GamepadView extends View {
             rightBound = w - dp(e) - sw - dp(12);
             menuTop = (shoulderTop + sh / 2f) - mh / 2f;
         } else {
-            leftBound = chipRect.right + dp(10);
+            leftBound = touchChipRect.right + dp(10);
             rightBound = w - dp(e);
             menuTop = dp(10);
         }
@@ -322,6 +414,28 @@ public final class GamepadView extends View {
         float menuCx = (leftBound + rightBound) / 2f;
         select.rect.set(menuCx - dp(4) - mw, menuTop, menuCx - dp(4), menuTop + mh);
         start.rect.set(menuCx + dp(4), menuTop, menuCx + dp(4) + mw, menuTop + mh);
+
+        // --- touch pad: one visible panel in the middle of the page, or the whole empty area
+        float tpLeft;
+        float tpTop;
+        float tpRight;
+        float tpBottom;
+        if (landscapeLayout) {
+            tpLeft = dp(e) + sw + dp(16);
+            tpRight = w - dp(e) - sw - dp(16);
+            tpTop = shoulderTop + sh + dp(10);
+            tpBottom = Math.min(padCy - padHalf, faceCy - faceHalf) - dp(14);
+        } else {
+            tpLeft = dp(e);
+            tpRight = w - dp(e);
+            tpTop = select.rect.bottom + dp(12);
+            tpBottom = shoulderTop - dp(10);
+        }
+        if (tpRight - tpLeft < dp(80) || tpBottom - tpTop < dp(60)) {
+            touchRect.setEmpty();
+        } else {
+            touchRect.set(tpLeft, tpTop, tpRight, tpBottom);
+        }
     }
 
     @Override
@@ -336,6 +450,8 @@ public final class GamepadView extends View {
     protected void onDraw(Canvas canvas) {
         layout();
         boolean connected = hid != null && hid.isConnected();
+        drawTouchLayer(canvas, connected);
+        drawTouchChip(canvas, connected);
         drawSettingsChip(canvas, connected);
         if (padType == PAD_DISC) {
             drawDisc(canvas, connected);
@@ -344,6 +460,90 @@ public final class GamepadView extends View {
         }
         for (Btn btn : new Btn[]{x, y, a, b}) drawFace(canvas, btn, connected);
         for (Btn btn : new Btn[]{l1, r1, select, start}) drawPill(canvas, btn, connected);
+    }
+
+    /** Draws the 「触控」 quick toggle (关 / 中间 / 全屏) right next to the settings chip. */
+    private void drawTouchChip(Canvas canvas, boolean connected) {
+        boolean on = touchMode != TOUCH_OFF;
+        fillPaint.setColor(touchChipPressed ? blend(Ui.SURFACE_2, Ui.ACCENT, 0.30f) : Ui.SURFACE_2);
+        canvas.drawRoundRect(touchChipRect, dp(12), dp(12), fillPaint);
+        if (on) {
+            edgePaint.setColor(Ui.ACCENT);
+            edgePaint.setAlpha(150);
+            canvas.drawRoundRect(touchChipRect, dp(12), dp(12), edgePaint);
+            edgePaint.setAlpha(255);
+        }
+        chipPaint.setColor(!connected ? Ui.TEXT_DIM : (on ? Ui.ACCENT : Ui.TEXT));
+        chipPaint.setTextAlign(Paint.Align.CENTER);
+        String label = "触控 " + touchModeLabel(touchMode);
+        Ui.fitText(chipPaint, label, touchChipRect.width() - dp(14), dp(7));
+        float ty = touchChipRect.centerY() - (chipPaint.descent() + chipPaint.ascent()) / 2f;
+        canvas.drawText(label, touchChipRect.centerX(), ty, chipPaint);
+    }
+
+    /** Paints the touch pad: a visible panel in the middle, or a faint hint over the empty area. */
+    private void drawTouchLayer(Canvas canvas, boolean connected) {
+        if (touchMode == TOUCH_OFF || touchRect.isEmpty()) return;
+        smallPaint.setTextAlign(Paint.Align.CENTER);
+        if (touchMode == TOUCH_FULL) {
+            float cx = touchRect.centerX();
+            float cy = touchRect.centerY();
+            smallPaint.setTextSize(dp(13f));
+            smallPaint.setColor(blend(Ui.BG, Ui.TEXT, 0.30f));
+            canvas.drawText("空白处 ＝ 触控区", cx, cy - dp(8), smallPaint);
+            smallPaint.setTextSize(dp(9.5f));
+            smallPaint.setColor(blend(Ui.BG, Ui.TEXT, 0.20f));
+            String hint = "单指移动 · 轻点＝左键 · 双指点击＝右键 · 双指滑＝滚动";
+            Ui.fitText(smallPaint, hint, touchRect.width() - dp(24), dp(7));
+            canvas.drawText(hint, cx, cy + dp(12), smallPaint);
+            return;
+        }
+
+        // TOUCH_PANEL: visible rounded panel with a small tag, target ring and hint text.
+        fillPaint.setColor(blend(Ui.BG, Ui.SURFACE, 0.55f));
+        canvas.drawRoundRect(touchRect, dp(18), dp(18), fillPaint);
+        edgePaint.setColor(blend(Ui.SURFACE_2, Ui.TEXT, 0.18f));
+        edgePaint.setStrokeWidth(dp(1.2f));
+        canvas.drawRoundRect(touchRect, dp(18), dp(18), edgePaint);
+        edgePaint.setStrokeWidth(dp(1.4f));
+
+        float cx = touchRect.centerX();
+        float cy = touchRect.centerY();
+        // Landscape panels are short: fall back to a compact ring + label row so nothing spills out.
+        boolean compact = touchRect.height() < dp(104);
+
+        if (!compact) {
+            smallPaint.setTextSize(dp(10f));
+            smallPaint.setColor(Ui.TEXT_DIM);
+            smallPaint.setTextAlign(Paint.Align.LEFT);
+            canvas.drawText("触控板", touchRect.left + dp(14), touchRect.top + dp(18), smallPaint);
+        }
+
+        float ringY = compact ? cy : cy - dp(14);
+        edgePaint.setColor(blend(Ui.BG, Ui.TEXT, 0.45f));
+        canvas.drawCircle(cx, ringY, dp(7), edgePaint);
+        fillPaint.setColor(Ui.TEXT_DIM);
+        canvas.drawCircle(cx, ringY, dp(2.4f), fillPaint);
+
+        String hint = touchMoveOnly
+                ? "单指移动 · 双指滑＝滚动（只移动）"
+                : "单指移动 · 轻点＝左键 · 双指点击＝右键";
+        if (compact) {
+            smallPaint.setTextSize(dp(12f));
+            smallPaint.setColor(Ui.TEXT_DIM);
+            smallPaint.setTextAlign(Paint.Align.LEFT);
+            float ty = ringY - (smallPaint.descent() + smallPaint.ascent()) / 2f;
+            canvas.drawText("触控区", cx + dp(16), ty, smallPaint);
+            return;
+        }
+
+        smallPaint.setTextAlign(Paint.Align.CENTER);
+        smallPaint.setTextSize(dp(12.5f));
+        smallPaint.setColor(Ui.TEXT_DIM);
+        canvas.drawText("触控区", cx, cy + dp(8), smallPaint);
+        smallPaint.setTextSize(dp(9.5f));
+        Ui.fitText(smallPaint, hint, touchRect.width() - dp(24), dp(7));
+        canvas.drawText(hint, cx, cy + dp(26), smallPaint);
     }
 
     private void drawSettingsChip(Canvas canvas, boolean connected) {
@@ -545,6 +745,12 @@ public final class GamepadView extends View {
                 showSettingsDialog();
                 return true;
             }
+            if (touchChipRect.contains(e.getX(), e.getY())) {
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                touchChipPressed = true;
+                invalidate();
+                return true;
+            }
         }
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
             int index = e.getActionIndex();
@@ -565,10 +771,28 @@ public final class GamepadView extends View {
                     invalidate();
                     send();
                 }
+                return true;
+            }
+            // Nothing else grabbed this finger: it belongs to the touch pad.
+            if (tpMode == TP_PAD) {
+                tpMaxPointers = Math.max(tpMaxPointers, e.getPointerCount());
+                if (tpMaxPointers >= 2) {
+                    tpLastScrollY = averageY(e);
+                    tpScrollAcc = 0f;
+                }
+                return true;
+            }
+            if (touchMode != TOUCH_OFF && inTouchArea(x, y)) {
+                startTouchPad(e, index);
+                return true;
             }
             return true;
         }
         if (action == MotionEvent.ACTION_MOVE) {
+            if (tpMode == TP_PAD) {
+                handleTouchPadMove(e);
+                return true;
+            }
             if (discPointer != -1) {
                 int idx = e.findPointerIndex(discPointer);
                 if (idx >= 0) updateDisc(e.getX(idx), e.getY(idx));
@@ -577,6 +801,22 @@ public final class GamepadView extends View {
         }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP) {
             int pointerId = e.getPointerId(e.getActionIndex());
+            if (touchChipPressed && action == MotionEvent.ACTION_UP) {
+                touchChipPressed = false;
+                cycleTouchMode();
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                return true;
+            }
+            if (tpMode == TP_PAD && pointerId == tpPointerId) {
+                finishTouchPad();
+                return true;
+            }
+            if (tpMode == TP_PAD) {
+                // A secondary finger lifted; keep tracking the primary one.
+                tpMaxPointers = Math.max(1, e.getPointerCount() - 1);
+                tpLastScrollY = averageY(e);
+                return true;
+            }
             if (padType == PAD_DISC && pointerId == discPointer) {
                 discPointer = -1;
                 setDiscHat(HAT_NEUTRAL);
@@ -600,11 +840,94 @@ public final class GamepadView extends View {
                 discPointer = -1;
                 setDiscHat(HAT_NEUTRAL);
             }
+            resetTouchPad();
+            touchChipPressed = false;
             invalidate();
             send();
             return true;
         }
         return true;
+    }
+
+    // -------------------------------------------------------------- touch pad
+
+    private boolean inTouchArea(float x, float y) {
+        if (touchMode == TOUCH_PANEL) return touchRect.contains(x, y);
+        // Full mode: every empty pixel, but keep a palm guard along the screen edge.
+        float guard = dp(10);
+        return x > guard && y > guard && x < getWidth() - guard && y < getHeight() - guard;
+    }
+
+    private void startTouchPad(MotionEvent e, int index) {
+        tpMode = TP_PAD;
+        tpPointerId = e.getPointerId(index);
+        tpDownX = e.getX(index);
+        tpDownY = e.getY(index);
+        tpLastX = tpDownX;
+        tpLastY = tpDownY;
+        tpDownTime = System.currentTimeMillis();
+        tpMoved = false;
+        tpScrolled = false;
+        tpMaxPointers = e.getPointerCount();
+        tpAccumX = 0f;
+        tpAccumY = 0f;
+        tpScrollAcc = 0f;
+        tpLastScrollY = averageY(e);
+        invalidate();
+    }
+
+    private void handleTouchPadMove(MotionEvent e) {
+        int idx = e.findPointerIndex(tpPointerId);
+        if (idx < 0) return;
+        if (e.getPointerCount() >= 2) {
+            float y = averageY(e);
+            float dy = y - tpLastScrollY;
+            tpLastScrollY = y;
+            tpScrollAcc += dy;
+            float step = dp(20);
+            int steps = (int) (tpScrollAcc / step);
+            if (steps != 0) {
+                tpScrollAcc -= steps * step;
+                tpScrolled = true;
+                if (hid != null) hid.mouseWheel(-steps);
+            }
+            return;
+        }
+        tpMaxPointers = Math.max(tpMaxPointers, 1);
+        float x = e.getX(idx);
+        float y = e.getY(idx);
+        tpAccumX += (x - tpLastX) * POINTER_SPEED;
+        tpAccumY += (y - tpLastY) * POINTER_SPEED;
+        tpLastX = x;
+        tpLastY = y;
+        int dx = (int) tpAccumX;
+        int dy = (int) tpAccumY;
+        if (dx != 0 || dy != 0) {
+            tpAccumX -= dx;
+            tpAccumY -= dy;
+            if (hid != null) hid.mouseMove(dx, dy);
+        }
+        float movedX = Math.abs(x - tpDownX);
+        float movedY = Math.abs(y - tpDownY);
+        if (!tpMoved && (movedX > dp(6) || movedY > dp(6))) tpMoved = true;
+    }
+
+    private void finishTouchPad() {
+        long held = System.currentTimeMillis() - tpDownTime;
+        if (!tpMoved && !tpScrolled && held < TAP_MAX_MS && !touchMoveOnly && hid != null) {
+            performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+            hid.mouseClick(tpMaxPointers >= 2 ? MOUSE_RIGHT : MOUSE_LEFT);
+        }
+        resetTouchPad();
+        tpPointerId = -1;
+        invalidate();
+    }
+
+    private float averageY(MotionEvent e) {
+        float sum = 0f;
+        int n = e.getPointerCount();
+        for (int i = 0; i < n; i++) sum += e.getY(i);
+        return n == 0 ? 0f : sum / n;
     }
 
     private boolean inDisc(float x, float y) {
@@ -666,6 +989,8 @@ public final class GamepadView extends View {
         final float originalPadScale = padScale;
         final float originalBtnScale = btnScale;
         final boolean originalCompat = hatCompat;
+        final int originalTouch = touchMode;
+        final boolean originalMoveOnly = touchMoveOnly;
 
         final boolean land = getResources().getConfiguration().orientation
                 == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
@@ -682,21 +1007,12 @@ public final class GamepadView extends View {
         title.setTypeface(null, android.graphics.Typeface.BOLD);
         box.addView(title);
 
-        LinearLayout.LayoutParams labelLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        labelLp.topMargin = dpi(16);
-        box.addView(settingsLabel(ctx, "移动盘类型"), labelLp);
-
         final int[] typeHolder = {padType};
         LinearLayout typeRow = segment(ctx, new String[]{"按键", "圆盘"}, padType, which -> {
             typeHolder[0] = which == 0 ? PAD_BUTTONS : PAD_DISC;
             setPadType(typeHolder[0]);
         });
-        LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        rowLp.gravity = Gravity.END;
-        rowLp.topMargin = dpi(6);
-        box.addView(typeRow, rowLp);
+        addOption(box, ctx, "移动盘类型", typeRow, land, 16);
 
         LinearLayout.LayoutParams padLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -710,21 +1026,27 @@ public final class GamepadView extends View {
         box.addView(settingsLabel(ctx, "按键大小（ABXY / 肩键 / 菜单键）"), btnLp);
         box.addView(sliderRow(ctx, btnScale, this::setBtnScale));
 
-        LinearLayout.LayoutParams compatLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        compatLp.topMargin = land ? dpi(9) : dpi(14);
-        box.addView(settingsLabel(ctx, "方向键方向"), compatLp);
-
         final boolean[] compatHolder = {hatCompat};
         LinearLayout compatRow = segment(ctx, new String[]{"正常", "修正一格"}, hatCompat ? 1 : 0, which -> {
             compatHolder[0] = which == 1;
             setHatCompat(compatHolder[0]);
         });
-        LinearLayout.LayoutParams compatRowLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        compatRowLp.gravity = Gravity.END;
-        compatRowLp.topMargin = dpi(6);
-        box.addView(compatRow, compatRowLp);
+        addOption(box, ctx, "方向键方向", compatRow, land, land ? 7 : 14);
+
+        final int[] touchHolder = {touchMode};
+        int touchIndex = touchMode == TOUCH_OFF ? 0 : (touchMode == TOUCH_FULL ? 2 : 1);
+        LinearLayout touchRow = segment(ctx, new String[]{"关", "中间", "全屏"}, touchIndex, which -> {
+            touchHolder[0] = which == 0 ? TOUCH_OFF : (which == 2 ? TOUCH_FULL : TOUCH_PANEL);
+            setTouchMode(touchHolder[0]);
+        });
+        addOption(box, ctx, "手柄页触控板", touchRow, land, land ? 7 : 14);
+
+        final boolean[] moveHolder = {touchMoveOnly};
+        LinearLayout moveRow = segment(ctx, new String[]{"完整", "只移动"}, touchMoveOnly ? 1 : 0, which -> {
+            moveHolder[0] = which == 1;
+            setTouchMoveOnly(moveHolder[0]);
+        });
+        addOption(box, ctx, "触控点击", moveRow, land, land ? 7 : 12);
 
         TextView hint = new TextView(ctx);
         hint.setText(land
@@ -755,6 +1077,8 @@ public final class GamepadView extends View {
             setPadScale(originalPadScale);
             setBtnScale(originalBtnScale);
             setHatCompat(originalCompat);
+            setTouchMode(originalTouch);
+            setTouchMoveOnly(originalMoveOnly);
             dialog.dismiss();
         });
         TextView save = new TextView(ctx);
@@ -768,6 +1092,8 @@ public final class GamepadView extends View {
         save.setOnClickListener(v -> {
             setPadType(typeHolder[0]);
             setHatCompat(compatHolder[0]);
+            setTouchMode(touchHolder[0]);
+            setTouchMoveOnly(moveHolder[0]);
             dialog.dismiss();
         });
         LinearLayout.LayoutParams cancelLp = new LinearLayout.LayoutParams(
@@ -776,14 +1102,26 @@ public final class GamepadView extends View {
         buttons.addView(cancel, cancelLp);
         buttons.addView(save, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-        box.addView(buttons, buttonsLp);
+        // Landscape has very little vertical room, so the option list scrolls while the 取消/保存
+        // row stays pinned at the bottom of the dialog.
+        LinearLayout outer = new LinearLayout(ctx);
+        outer.setOrientation(LinearLayout.VERTICAL);
+        outer.setBackground(Ui.rounded(ctx, Ui.SURFACE, 22));
+        outer.setPadding(dpi(20), land ? dpi(12) : dpi(18), dpi(20), land ? dpi(10) : dpi(16));
+        box.setBackground(null);
+        box.setPadding(0, 0, 0, 0);
 
-        // Landscape has very little vertical room, so allow the whole panel to scroll instead of
-        // clipping the hint text at the bottom.
         ScrollView scroller = new ScrollView(ctx);
         scroller.setFillViewport(false);
         scroller.addView(box);
-        dialog.setContentView(scroller);
+        outer.addView(scroller, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        LinearLayout.LayoutParams pinnedLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pinnedLp.gravity = Gravity.END;
+        pinnedLp.topMargin = land ? dpi(8) : dpi(14);
+        outer.addView(buttons, pinnedLp);
+        dialog.setContentView(outer);
         Window window = dialog.getWindow();
         if (window != null) {
             window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
@@ -791,8 +1129,11 @@ public final class GamepadView extends View {
             window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
             WindowManager.LayoutParams lp = new WindowManager.LayoutParams();
             lp.copyFrom(window.getAttributes());
-            lp.width = Math.round(dp(330));
-            lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
+            lp.width = Math.round(dp(land ? 392 : 330));
+            // Landscape is only ~393dp tall: bound the window so the content scrolls instead of
+            // being clipped by the screen edge.
+            int screenH = getResources().getDisplayMetrics().heightPixels;
+            lp.height = land ? Math.round(screenH * 0.86f) : WindowManager.LayoutParams.WRAP_CONTENT;
             window.setAttributes(lp);
         }
         dialog.show();
@@ -809,6 +1150,37 @@ public final class GamepadView extends View {
 
     private static float progressToScale(int progress) {
         return SCALE_MIN + (SCALE_MAX - SCALE_MIN) * (progress / (float) SCALE_STEPS);
+    }
+
+    /**
+     * Adds one labelled option group: stacked (label above, buttons right aligned) in portrait, and
+     * on a single line in landscape where vertical room is scarce.
+     */
+    private void addOption(LinearLayout box, Context ctx, String label, LinearLayout seg,
+                           boolean land, int topMarginDp) {
+        if (land) {
+            LinearLayout row = new LinearLayout(ctx);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.addView(settingsLabel(ctx, label), new LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            row.addView(seg, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            lp.topMargin = dpi(topMarginDp);
+            box.addView(row, lp);
+            return;
+        }
+        LinearLayout.LayoutParams labelLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        labelLp.topMargin = dpi(topMarginDp);
+        box.addView(settingsLabel(ctx, label), labelLp);
+        LinearLayout.LayoutParams segLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        segLp.gravity = Gravity.END;
+        segLp.topMargin = dpi(6);
+        box.addView(seg, segLp);
     }
 
     private LinearLayout sliderRow(Context ctx, float value, ScalePick pick) {

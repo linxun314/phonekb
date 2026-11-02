@@ -40,7 +40,7 @@
 - **键盘**：手机布局 / 电脑布局两套，含符号页、Ctrl+C/V/X/A、Alt+Tab、方向键
 - **触控板**：单指移动 · 点击左键 · 双指滚动 · 双指点击右键 · 三指中键；物理左/中/右键可长按拖动；一键弹出浮层数字键盘 / 浮层键盘
 - **媒体键**：媒体条 + 音量 / 静音 / CC / **亮度 −/＋**、返回 / 主页 / 菜单 / 电源（亮度键在 vivo 等不认键码的平板上会走 WiFi 伴侣调系统亮度）
-- **游戏手柄**：手机式浮键布局（左下移动盘、右下 X/Y/A/B、两侧 L1/R1、顶部 SELECT/START，中间留空不挡画面），移动盘可切十字键 / 圆盘两种形态，移动盘与按键大小各有 60%–150% 无级滑块并记忆，支持多指同时按；设置里还有「方向键方向」修正开关，解决旧配对导致的整体偏一格
+- **游戏手柄**：手机式浮键布局（左下移动盘、右下 X/Y/A/B、两侧 L1/R1、顶部 SELECT/START，中间留空不挡画面），移动盘可切十字键 / 圆盘两种形态，移动盘与按键大小各有 60%–150% 无级滑块并记忆，支持多指同时按；设置里还有「方向键方向」修正开关，解决旧配对导致的整体偏一格。页面中间的空白也能当触控板：顶部「触控」小键切换 关 / 中间一块可见触控板 / 除按键外整片空白，手势与触控板页一致（单指移动、轻点＝左键、双指点击＝右键、双指滑＝滚动），并可选「只移动」不点击
 - **双手模式**：左侧触控区 + 右侧按键板，一键「互换」左右/上下位置
 - **单手模式**：拇指遥控台 / 拇指键盘，左右手可切换，适合单手握持手机
 - **横竖屏自适应**：横屏紧凑工具栏 + 沉浸全屏；顶部「旋转」键强制横/竖屏（长按恢复跟随系统）
@@ -190,7 +190,7 @@ PhoneKB 不传输画面，只把手机当外设，所以延迟低、被控端干
 ### 命令行（不装 Android Studio，Windows）
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools/build.ps1 -Clean -Module app -VersionName 0.20.2 -VersionCode 28
+powershell -ExecutionPolicy Bypass -File tools/build.ps1 -Clean -Module app -VersionName 0.21.0 -VersionCode 29
 powershell -ExecutionPolicy Bypass -File tools/build.ps1 -Clean -Module companion -VersionName 0.4.0 -VersionCode 4
 ```
 
