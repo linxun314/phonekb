@@ -1050,8 +1050,10 @@ public final class GamepadView extends View {
                 updateDisc(x, y);
                 return true;
             }
-            if (tpOpen && tpPanelRect.contains(x, y)) {
+            if (tpOpen && tpPanelRect.contains(x, y) && tpMode != TP_PAD) {
                 // Overlay wins over whatever sits underneath it (it can overlap ABXY at high sizes).
+                // A second finger must fall through to the TP_PAD branch below, otherwise the two-finger
+                // tap (right click) and two-finger scroll would restart on the new pointer.
                 startTouchPad(e, index);
                 return true;
             }
