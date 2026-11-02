@@ -6,6 +6,7 @@ import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.DashPathEffect;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
@@ -47,6 +48,11 @@ public final class GamepadView extends View {
     private static final float SCALE_MAX = 1.50f;
     private static final float SCALE_DEFAULT = 1.00f;
     private static final int SCALE_STEPS = 90;
+
+    /** Gamepad page layout: floating keys (default) or the full-body controller skin. */
+    public static final int LAYOUT_FLOAT = 0;
+    public static final int LAYOUT_SKIN = 1;
+    private static final long EDIT_PRESS_MS = 600;
 
     /** Gamepad page touch-pad placement: off / one visible panel in the middle / the whole empty area. */
     public static final int TOUCH_OFF = 0;
@@ -103,7 +109,10 @@ public final class GamepadView extends View {
     private final Btn select = new Btn(HidConstants.GP_SELECT, KIND_PILL, "SELECT", Ui.KEY, Ui.TEXT);
     private final Btn start = new Btn(HidConstants.GP_START, KIND_PILL, "START", Ui.KEY, Ui.TEXT);
 
-    private final Btn[] all = {up, down, left, right, l1, r1, x, y, a, b, select, start};
+    private final Btn l2 = new Btn(HidConstants.GP_L2, KIND_PILL, "LT", Ui.KEY, Ui.TEXT);
+    private final Btn r2 = new Btn(HidConstants.GP_R2, KIND_PILL, "RT", Ui.KEY, Ui.TEXT);
+
+    private final Btn[] all = {up, down, left, right, l1, r1, l2, r2, x, y, a, b, select, start};
     private final Map<Integer, Btn> pointers = new HashMap<>();
     private int mask;
     private final RectF chipRect = new RectF();
@@ -179,6 +188,38 @@ public final class GamepadView extends View {
     private float padCx;
     private float padCy;
     private float padHalf;
+    private float faceCx;
+    private float faceCy;
+    private float faceRingR;
+
+    // ---- v0.24: full-body controller skin, analog sticks and the free layout editor
+    private int layoutMode;
+    private boolean editing;
+    private final RectF bodyRect = new RectF();
+    private final RectF stickLRect = new RectF();
+    private final RectF stickRRect = new RectF();
+    private final RectF editBarLeft = new RectF();
+    private final RectF editBarRight = new RectF();
+    private final RectF editScratch = new RectF();
+    private final RectF editBarFull = new RectF();
+    private final Map<String, float[]> liveOffsets = new HashMap<>();
+    private int stickLPointer = -1;
+    private int stickRPointer = -1;
+    private int lx;
+    private int ly;
+    private int rx;
+    private int ry;
+    private String editTarget;
+    private float editLastX;
+    private float editLastY;
+    private boolean editMoved;
+    private boolean blankPressed;
+    private final Runnable editPress = () -> {
+        if (!blankPressed || editing) return;
+        blankPressed = false;
+        setEditing(true);
+        buzz(16);
+    };
 
     public GamepadView(Context c, HidManager hid) {
         super(c);
@@ -193,6 +234,7 @@ public final class GamepadView extends View {
         touchMoveOnly = prefs.getBoolean("gp_touch_move_only", false);
         tpOffsetDp = prefs.getFloat("gp_tp_offset", 0f);
         haptics = prefs.getBoolean("gp_haptics", true);
+        layoutMode = prefs.getInt("gp_layout", LAYOUT_FLOAT) == LAYOUT_SKIN ? LAYOUT_SKIN : LAYOUT_FLOAT;
         vibrator = (android.os.Vibrator) c.getSystemService(Context.VIBRATOR_SERVICE);
         labelPaint = Ui.text(c, 20, Ui.TEXT);
         smallPaint = Ui.text(c, 12, Ui.TEXT);
@@ -292,6 +334,23 @@ public final class GamepadView extends View {
         invalidate();
     }
 
+    public int getLayoutMode() {
+        return layoutMode;
+    }
+
+    /** Switches between the floating keys and the full-body controller skin (remembered). */
+    public void setLayoutMode(int mode) {
+        int next = mode == LAYOUT_SKIN ? LAYOUT_SKIN : LAYOUT_FLOAT;
+        if (next == layoutMode) return;
+        resetInput();
+        layoutMode = next;
+        prefs.edit().putInt("gp_layout", layoutMode).apply();
+        setTouchpadOpen(false);
+        if (editing) setEditing(false);
+        layout();
+        invalidate();
+    }
+
     public int getTouchMode() {
         return touchMode;
     }
@@ -367,7 +426,13 @@ public final class GamepadView extends View {
             discPointer = -1;
             setDiscHat(HAT_NEUTRAL);
         }
-        if (hid != null) hid.sendGamepadWithHat(0, HAT_NEUTRAL);
+        stickLPointer = -1;
+        stickRPointer = -1;
+        lx = 0;
+        ly = 0;
+        rx = 0;
+        ry = 0;
+        if (hid != null) hid.sendGamepadFull(0, HAT_NEUTRAL, 0, 0, 0, 0);
     }
 
     // ---------------------------------------------------------------- layout
@@ -432,8 +497,9 @@ public final class GamepadView extends View {
         float r = rBaseDp * bs * unit;
         float off = r * 1.48f;
         float faceHalf = off + r;
-        float faceCx = w - dp(e) - faceHalf - clusterInset;
-        float faceCy = padCy;
+        faceCx = w - dp(e) - faceHalf - clusterInset;
+        faceCy = padCy;
+        faceRingR = faceHalf;
         y.rect.set(faceCx - r, faceCy - off - r, faceCx + r, faceCy - off + r);
         x.rect.set(faceCx - off - r, faceCy - r, faceCx - off + r, faceCy + r);
         b.rect.set(faceCx + off - r, faceCy - r, faceCx + off + r, faceCy + r);
@@ -497,6 +563,11 @@ public final class GamepadView extends View {
         select.rect.set(menuCx - dp(4) - mw, menuTop, menuCx - dp(4), menuTop + mh);
         start.rect.set(menuCx + dp(4), menuTop, menuCx + dp(4) + mw, menuTop + mh);
 
+        if (layoutMode == LAYOUT_SKIN) {
+            layoutSkin(w, h, unit);
+        }
+        applyStoredOffsets();
+
         // --- touch pad: one visible panel in the middle of the page, or the whole empty area
         float tpLeft;
         float tpTop;
@@ -528,6 +599,11 @@ public final class GamepadView extends View {
             touchRect.setEmpty();
         } else {
             touchRect.set(tpLeft, tpTop, tpRight, tpBottom);
+        }
+
+        if (layoutMode == LAYOUT_SKIN) {
+            // The skin draws its own body; a middle touch panel would sit on top of the artwork.
+            touchRect.setEmpty();
         }
 
         // --- floating touch pad overlay: right side by default, horizontally adjustable
@@ -580,6 +656,410 @@ public final class GamepadView extends View {
         }
     }
 
+    // ------------------------------------------------------- controller skin
+
+    /**
+     * Full-body controller skin: one rounded body with the d-pad ring on the left, the ABXY ring on
+     * the right, LB/LT / RB/RT stacked on the shoulders, the two sticks and the menu keys in the
+     * middle. Geometry is expressed as fractions of the body so portrait and landscape both work.
+     */
+    private void layoutSkin(float w, float h, float unit) {
+        bodyRect.set(dp(16), dp(46), w - dp(16), h - dp(12));
+        float bw = bodyRect.width();
+        float bh = bodyRect.height();
+        if (bw <= 0f || bh <= 0f) return;
+        boolean land = landscapeLayout;
+
+        chipRect.set(dp(14), dp(10), dp(14) + dp(78), dp(10) + dp(27));
+        touchChipRect.set(chipRect.right + dp(8), chipRect.top,
+                chipRect.right + dp(8) + dp(84), chipRect.bottom);
+        tpChipRect.set(w - dp(16) - dp(82), dp(10), w - dp(16), dp(10) + dp(27));
+
+        // Rings, sticks, shoulders and menu keys each own a band of the body so nothing overlaps.
+        float ringR = land ? bh * 0.26f : Math.min(bw * 0.145f, bh * 0.10f);
+        ringR = Math.max(dp(30), ringR * padScale);
+        padCx = bodyRect.left + bw * (land ? 0.215f : 0.28f);
+        padCy = bodyRect.top + bh * (land ? 0.44f : 0.17f);
+        padHalf = ringR;
+        discRect.set(padCx - ringR, padCy - ringR, padCx + ringR, padCy + ringR);
+
+        float s = ringR * 0.62f;
+        float arm = ringR * 0.60f;
+        up.rect.set(padCx - s / 2f, padCy - arm - s / 2f, padCx + s / 2f, padCy - arm + s / 2f);
+        down.rect.set(padCx - s / 2f, padCy + arm - s / 2f, padCx + s / 2f, padCy + arm + s / 2f);
+        left.rect.set(padCx - arm - s / 2f, padCy - s / 2f, padCx - arm + s / 2f, padCy + s / 2f);
+        right.rect.set(padCx + arm - s / 2f, padCy - s / 2f, padCx + arm + s / 2f, padCy + s / 2f);
+
+        float fr = ringR * 0.30f * btnScale;
+        float off = ringR * 0.52f;
+        faceCx = bodyRect.right - bw * (land ? 0.215f : 0.28f);
+        faceCy = padCy;
+        y.rect.set(faceCx - fr, faceCy - off - fr, faceCx + fr, faceCy - off + fr);
+        x.rect.set(faceCx - off - fr, faceCy - fr, faceCx - off + fr, faceCy + fr);
+        b.rect.set(faceCx + off - fr, faceCy - fr, faceCx + off + fr, faceCy + fr);
+        a.rect.set(faceCx - fr, faceCy + off - fr, faceCx + fr, faceCy + off + fr);
+        y.radius = fr;
+        x.radius = fr;
+        a.radius = fr;
+        b.radius = fr;
+        faceRingR = off + fr + dp(10);
+
+        float sw = bw * (land ? 0.105f : 0.34f) * btnScale;
+        float sh = bh * (land ? 0.15f : 0.052f) * btnScale;
+        float lbX = bodyRect.left + bw * (land ? 0.04f : 0.06f);
+        float tlY = bodyRect.top + bh * (land ? 0.03f : 0.40f);
+        float blY = bodyRect.top + bh * (land ? 0.80f : 0.472f);
+        l1.rect.set(lbX, tlY, lbX + sw, tlY + sh);
+        l2.rect.set(lbX, blY, lbX + sw, blY + sh);
+        float rbX = bodyRect.right - bw * (land ? 0.04f : 0.06f) - sw;
+        r1.rect.set(rbX, tlY, rbX + sw, tlY + sh);
+        r2.rect.set(rbX, blY, rbX + sw, blY + sh);
+
+        float mh = (land ? dp(30) : dp(24)) * btnScale;
+        float mw = (land ? dp(78) : dp(60)) * btnScale;
+        float menuCy = bodyRect.top + bh * (land ? 0.19f : 0.30f);
+        float menuCx = bodyRect.centerX();
+        select.rect.set(menuCx - dp(6) - mw, menuCy - mh / 2f, menuCx - dp(6), menuCy + mh / 2f);
+        start.rect.set(menuCx + dp(6), menuCy - mh / 2f, menuCx + dp(6) + mw, menuCy + mh / 2f);
+
+        float sr = (land ? bh * 0.11f : Math.min(bw * 0.115f, bh * 0.07f)) * btnScale;
+        float sy = bodyRect.top + bh * (land ? 0.73f : 0.60f);
+        float sxL = land ? bodyRect.centerX() - bw * 0.11f
+                : bodyRect.left + bw * 0.28f;
+        float sxR = land ? bodyRect.centerX() + bw * 0.11f
+                : bodyRect.right - bw * 0.28f;
+        stickLRect.set(sxL - sr, sy - sr, sxL + sr, sy + sr);
+        stickRRect.set(sxR - sr, sy - sr, sxR + sr, sy + sr);
+    }
+
+    // -------------------------------------------------------- layout offsets
+
+    /** Items the free layout editor can move; the key names also end up in SharedPreferences. */
+    private static final String[] OFFSET_ITEMS =
+            {"pad", "face", "l1", "r1", "l2", "r2", "select", "start", "stickL", "stickR"};
+
+    private String offsetKey(String name) {
+        return "gp_off" + (layoutMode == LAYOUT_SKIN ? "s" : "f")
+                + (landscapeLayout ? "l" : "p") + name;
+    }
+
+    private float[] offsetOf(String name) {
+        float[] live = liveOffsets.get(name);
+        if (live != null) return live;
+        String key = offsetKey(name);
+        return new float[]{prefs.getFloat(key + "_x", 0f), prefs.getFloat(key + "_y", 0f)};
+    }
+
+    /** Applies every saved per-item offset (portrait and landscape are stored separately). */
+    private void applyStoredOffsets() {
+        for (String name : OFFSET_ITEMS) {
+            float[] o = offsetOf(name);
+            if (o[0] == 0f && o[1] == 0f) continue;
+            float dx = dp(o[0]);
+            float dy = dp(o[1]);
+            if ("pad".equals(name)) {
+                padCx += dx;
+                padCy += dy;
+                discRect.offset(dx, dy);
+                up.rect.offset(dx, dy);
+                down.rect.offset(dx, dy);
+                left.rect.offset(dx, dy);
+                right.rect.offset(dx, dy);
+            } else if ("face".equals(name)) {
+                faceCx += dx;
+                faceCy += dy;
+                x.rect.offset(dx, dy);
+                y.rect.offset(dx, dy);
+                a.rect.offset(dx, dy);
+                b.rect.offset(dx, dy);
+            } else if ("l1".equals(name)) {
+                l1.rect.offset(dx, dy);
+            } else if ("r1".equals(name)) {
+                r1.rect.offset(dx, dy);
+            } else if ("l2".equals(name)) {
+                l2.rect.offset(dx, dy);
+            } else if ("r2".equals(name)) {
+                r2.rect.offset(dx, dy);
+            } else if ("select".equals(name)) {
+                select.rect.offset(dx, dy);
+            } else if ("start".equals(name)) {
+                start.rect.offset(dx, dy);
+            } else if ("stickL".equals(name)) {
+                stickLRect.offset(dx, dy);
+            } else if ("stickR".equals(name)) {
+                stickRRect.offset(dx, dy);
+            }
+        }
+    }
+
+    private void nudgeOffset(String name, float ddx, float ddy) {
+        float[] cur = offsetOf(name);
+        liveOffsets.put(name, new float[]{cur[0] + ddx, cur[1] + ddy});
+    }
+
+    private void persistOffset(String name) {
+        float[] cur = liveOffsets.get(name);
+        if (cur == null) return;
+        String key = offsetKey(name);
+        prefs.edit().putFloat(key + "_x", cur[0]).putFloat(key + "_y", cur[1]).apply();
+    }
+
+    /** Drops every custom position for the current layout + orientation. */
+    public void resetLayoutOffsets() {
+        liveOffsets.clear();
+        SharedPreferences.Editor editor = prefs.edit();
+        for (String name : OFFSET_ITEMS) {
+            String key = offsetKey(name);
+            editor.remove(key + "_x").remove(key + "_y");
+        }
+        editor.apply();
+        layout();
+        invalidate();
+    }
+
+    private RectF itemRect(String name, RectF out) {
+        out.setEmpty();
+        if ("pad".equals(name)) {
+            out.set(discRect);
+            if (padType == PAD_BUTTONS) {
+                out.union(up.rect);
+                out.union(down.rect);
+                out.union(left.rect);
+                out.union(right.rect);
+            }
+        } else if ("face".equals(name)) {
+            out.set(x.rect);
+            out.union(y.rect);
+            out.union(a.rect);
+            out.union(b.rect);
+        } else if ("l1".equals(name)) {
+            out.set(l1.rect);
+        } else if ("r1".equals(name)) {
+            out.set(r1.rect);
+        } else if ("l2".equals(name)) {
+            out.set(l2.rect);
+        } else if ("r2".equals(name)) {
+            out.set(r2.rect);
+        } else if ("select".equals(name)) {
+            out.set(select.rect);
+        } else if ("start".equals(name)) {
+            out.set(start.rect);
+        } else if ("stickL".equals(name)) {
+            out.set(stickLRect);
+        } else if ("stickR".equals(name)) {
+            out.set(stickRRect);
+        }
+        if (!out.isEmpty()) out.inset(-dp(6), -dp(6));
+        return out;
+    }
+
+    private String itemAt(float px, float py) {
+        if (containsBtn(up, px, py) || containsBtn(down, px, py)
+                || containsBtn(left, px, py) || containsBtn(right, px, py)
+                || (!discRect.isEmpty() && discRect.contains(px, py))) {
+            return "pad";
+        }
+        if (containsBtn(x, px, py) || containsBtn(y, px, py)
+                || containsBtn(a, px, py) || containsBtn(b, px, py)) {
+            return "face";
+        }
+        if (!l1.rect.isEmpty() && l1.rect.contains(px, py)) return "l1";
+        if (!r1.rect.isEmpty() && r1.rect.contains(px, py)) return "r1";
+        if (!l2.rect.isEmpty() && l2.rect.contains(px, py)) return "l2";
+        if (!r2.rect.isEmpty() && r2.rect.contains(px, py)) return "r2";
+        if (!select.rect.isEmpty() && select.rect.contains(px, py)) return "select";
+        if (!start.rect.isEmpty() && start.rect.contains(px, py)) return "start";
+        if (!stickLRect.isEmpty() && stickLRect.contains(px, py)) return "stickL";
+        if (!stickRRect.isEmpty() && stickRRect.contains(px, py)) return "stickR";
+        return null;
+    }
+
+    private static boolean containsBtn(Btn btn, float px, float py) {
+        if (btn.rect.isEmpty()) return false;
+        if (btn.kind == KIND_FACE) {
+            float dx = px - btn.rect.centerX();
+            float dy = py - btn.rect.centerY();
+            float limit = btn.radius * 1.06f;
+            return dx * dx + dy * dy <= limit * limit;
+        }
+        return btn.rect.contains(px, py);
+    }
+
+    // ------------------------------------------------------- analog sticks
+
+    private void updateStick(boolean isLeft, float px, float py) {
+        RectF r = isLeft ? stickLRect : stickRRect;
+        if (r.isEmpty()) return;
+        float cx = r.centerX();
+        float cy = r.centerY();
+        float rad = Math.max(dp(8), r.width() / 2f);
+        float nx = (px - cx) / rad;
+        float ny = (py - cy) / rad;
+        float len = (float) Math.hypot(nx, ny);
+        if (len > 1f) {
+            nx /= len;
+            ny /= len;
+        }
+        int ax = Math.round(nx * 127f);
+        int ay = Math.round(ny * 127f);
+        if (isLeft) {
+            if (ax == lx && ay == ly) return;
+            lx = ax;
+            ly = ay;
+        } else {
+            if (ax == rx && ay == ry) return;
+            rx = ax;
+            ry = ay;
+        }
+        send();
+        invalidate();
+    }
+
+    // ---------------------------------------------------- the layout editor
+
+    public boolean isEditing() {
+        return editing;
+    }
+
+    /** Enters / leaves the free layout editor (blue dashed boxes, drag any key to move it). */
+    public void setEditing(boolean on) {
+        if (editing == on) return;
+        editing = on;
+        removeCallbacks(editPress);
+        blankPressed = false;
+        editTarget = null;
+        editLastX = 0f;
+        editLastY = 0f;
+        editMoved = false;
+        resetInput();
+        invalidate();
+    }
+
+    private boolean handleEditTouch(MotionEvent e) {
+        int action = e.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            float x0 = e.getX();
+            float y0 = e.getY();
+            if (editBarLeft.contains(x0, y0)) {
+                resetLayoutOffsets();
+                buzz(10);
+                return true;
+            }
+            if (editBarRight.contains(x0, y0)) {
+                setEditing(false);
+                buzz(10);
+                return true;
+            }
+            editTarget = itemAt(x0, y0);
+            editLastX = x0;
+            editLastY = y0;
+            editMoved = false;
+            invalidate();
+            return true;
+        }
+        if (action == MotionEvent.ACTION_MOVE && editTarget != null) {
+            float dx = e.getX() - editLastX;
+            float dy = e.getY() - editLastY;
+            if (Math.abs(dx) > dp(0.6f) || Math.abs(dy) > dp(0.6f)) {
+                editLastX = e.getX();
+                editLastY = e.getY();
+                editMoved = true;
+                nudgeOffset(editTarget, dx / dp(1f), dy / dp(1f));
+                layout();
+                invalidate();
+            }
+            return true;
+        }
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+            if (editTarget != null && editMoved) {
+                persistOffset(editTarget);
+                buzz(8);
+            }
+            editTarget = null;
+            editMoved = false;
+            invalidate();
+            return true;
+        }
+        return true;
+    }
+
+    // ------------------------------------------------------------ skin paint
+
+    private void drawSkinBody(Canvas canvas, boolean connected) {
+        float rad = dp(landscapeLayout ? 34f : 42f);
+        fillPaint.setColor(0xFF2C3042);
+        canvas.drawRoundRect(bodyRect, rad, rad, fillPaint);
+        edgePaint.setColor(0xFF363A4E);
+        edgePaint.setStrokeWidth(dp(2f));
+        canvas.drawRoundRect(bodyRect, rad, rad, edgePaint);
+
+        edgePaint.setColor(0xFFD3DAE7);
+        edgePaint.setStrokeWidth(dp(2.2f));
+        canvas.drawCircle(padCx, padCy, padHalf, edgePaint);
+        if (faceRingR > 0f) canvas.drawCircle(faceCx, faceCy, faceRingR, edgePaint);
+        drawStick(canvas, stickLRect, lx, ly, "L");
+        drawStick(canvas, stickRRect, rx, ry, "R");
+        edgePaint.setStrokeWidth(dp(1.2f));
+    }
+
+    private void drawStick(Canvas canvas, RectF r, int ax, int ay, String label) {
+        if (r.isEmpty()) return;
+        float cx = r.centerX();
+        float cy = r.centerY();
+        float rad = r.width() / 2f;
+        edgePaint.setColor(0xFFD3DAE7);
+        edgePaint.setStrokeWidth(dp(2.2f));
+        canvas.drawCircle(cx, cy, rad, edgePaint);
+        float travel = rad * 0.55f;
+        float kx = cx + travel * (ax / 127f);
+        float ky = cy + travel * (ay / 127f);
+        fillPaint.setColor(0xFFEDF0F6);
+        canvas.drawCircle(kx, ky, rad * 0.45f, fillPaint);
+        smallPaint.setColor(0xFF3E4657);
+        smallPaint.setTextAlign(Paint.Align.CENTER);
+        canvas.drawText(label, kx, ky + dp(4), smallPaint);
+        smallPaint.setColor(Ui.TEXT);
+    }
+
+    private void drawEditOverlay(Canvas canvas) {
+        float barTop = dp(8);
+        float barBottom = barTop + dp(34);
+        editBarRight.set(getWidth() - dp(12) - dp(62), barTop + dp(4),
+                getWidth() - dp(12), barBottom - dp(4));
+        editBarLeft.set(editBarRight.left - dp(8) - dp(54), barTop + dp(4),
+                editBarRight.left - dp(8), barBottom - dp(4));
+        fillPaint.setColor(0xE6000000);
+        editBarFull.set(dp(8), barTop, getWidth() - dp(8), barBottom);
+        canvas.drawRoundRect(editBarFull, dp(10), dp(10), fillPaint);
+
+        smallPaint.setColor(Ui.TEXT);
+        smallPaint.setTextAlign(Paint.Align.LEFT);
+        smallPaint.setTextSize(dp(11));
+        canvas.drawText("拖动按键 · 松手保存", dp(20), barTop + dp(22), smallPaint);
+
+        fillPaint.setColor(Ui.SURFACE_2);
+        canvas.drawRoundRect(editBarLeft, dp(9), dp(9), fillPaint);
+        smallPaint.setColor(Ui.TEXT);
+        smallPaint.setTextAlign(Paint.Align.CENTER);
+        canvas.drawText("重置", editBarLeft.centerX(), editBarLeft.centerY() + dp(4), smallPaint);
+        fillPaint.setColor(Ui.ACCENT);
+        canvas.drawRoundRect(editBarRight, dp(9), dp(9), fillPaint);
+        smallPaint.setColor(0xFF0B1020);
+        canvas.drawText("完成", editBarRight.centerX(), editBarRight.centerY() + dp(4), smallPaint);
+
+        edgePaint.setColor(Ui.ACCENT);
+        edgePaint.setStrokeWidth(dp(1.6f));
+        edgePaint.setPathEffect(new DashPathEffect(new float[]{dp(5), dp(4)}, 0f));
+        for (String name : OFFSET_ITEMS) {
+            RectF box = itemRect(name, editScratch);
+            if (box.isEmpty()) continue;
+            float rr = dp(10);
+            canvas.drawRoundRect(box, rr, rr, edgePaint);
+        }
+        edgePaint.setPathEffect(null);
+        edgePaint.setStrokeWidth(dp(1.2f));
+    }
+
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
@@ -592,9 +1072,14 @@ public final class GamepadView extends View {
     protected void onDraw(Canvas canvas) {
         layout();
         boolean connected = hid != null && hid.isConnected();
+        if (layoutMode == LAYOUT_SKIN) drawSkinBody(canvas, connected);
         drawTouchLayer(canvas, connected);
-        drawTouchChip(canvas, connected);
-        drawSettingsChip(canvas, connected);
+        if (!editing) {
+            // The editor paints its own bar over this row, so skip the chips while editing.
+            drawTouchChip(canvas, connected);
+            drawSettingsChip(canvas, connected);
+            drawTouchpadChip(canvas, connected);
+        }
         if (padType == PAD_DISC) {
             drawDisc(canvas, connected);
         } else {
@@ -609,10 +1094,14 @@ public final class GamepadView extends View {
         drawFace(canvas, b, connected);
         drawPill(canvas, l1, connected);
         drawPill(canvas, r1, connected);
+        if (layoutMode == LAYOUT_SKIN) {
+            drawPill(canvas, l2, connected);
+            drawPill(canvas, r2, connected);
+        }
         drawPill(canvas, select, connected);
         drawPill(canvas, start, connected);
-        drawTouchpadChip(canvas, connected);
         drawTouchpadOverlay(canvas, connected);
+        if (editing) drawEditOverlay(canvas);
     }
 
     /** Draws the 「触控」 quick toggle (关 / 中间 / 全屏) right next to the settings chip. */
@@ -883,7 +1372,9 @@ public final class GamepadView extends View {
         smallPaint.setTextSize(dp(swTextSize()));
         smallPaint.setColor(discHat == HAT_NEUTRAL || !connected ? Ui.TEXT_DIM : Ui.ACCENT);
         String hint = discHat == HAT_NEUTRAL ? "按住滑动换方向" : "当前：" + DIR_NAMES[discHat];
-        if (landscapeLayout) {
+        if (layoutMode == LAYOUT_SKIN) {
+            // The skin paints its own ring; no hint needed.
+        } else if (landscapeLayout) {
             // Landscape is short: put the hint under the pad. Above it sits L1, to the right the
             // touch panel, so below the disc is the only free spot.
             smallPaint.setTextAlign(Paint.Align.CENTER);
@@ -1019,6 +1510,7 @@ public final class GamepadView extends View {
     @Override
     public boolean onTouchEvent(MotionEvent e) {
         int action = e.getActionMasked();
+        if (editing) return handleEditTouch(e);
         if (action == MotionEvent.ACTION_DOWN) {
             if (chipRect.contains(e.getX(), e.getY())) {
                 buzz(10);
@@ -1036,6 +1528,12 @@ public final class GamepadView extends View {
                 tpChipPressed = true;
                 invalidate();
                 return true;
+            }
+            if (!tpOpen && touchMode == TOUCH_OFF && hit(e.getX(), e.getY()) == null) {
+                // Long-press empty space to jump straight into the layout editor.
+                blankPressed = true;
+                removeCallbacks(editPress);
+                postDelayed(editPress, EDIT_PRESS_MS);
             }
             if (tpOpen && !tpPanelRect.isEmpty() && tpMode != TP_PAD && e.getPointerCount() == 1
                     && !tpPanelRect.contains(e.getX(), e.getY())) {
@@ -1067,6 +1565,18 @@ public final class GamepadView extends View {
                         invalidate();
                         return true;
                     }
+                }
+            }
+            if (layoutMode == LAYOUT_SKIN) {
+                if (stickLPointer == -1 && stickLRect.contains(x, y)) {
+                    stickLPointer = e.getPointerId(index);
+                    updateStick(true, x, y);
+                    return true;
+                }
+                if (stickRPointer == -1 && stickRRect.contains(x, y)) {
+                    stickRPointer = e.getPointerId(index);
+                    updateStick(false, x, y);
+                    return true;
                 }
             }
             if (padType == PAD_DISC && inDisc(x, y)) {
@@ -1117,6 +1627,18 @@ public final class GamepadView extends View {
             if (tpMode == TP_PAD) {
                 handleTouchPadMove(e);
                 return true;
+            }
+            if (blankPressed) {
+                removeCallbacks(editPress);
+                blankPressed = false;
+            }
+            if (stickLPointer != -1) {
+                int idx = e.findPointerIndex(stickLPointer);
+                if (idx >= 0) updateStick(true, e.getX(idx), e.getY(idx));
+            }
+            if (stickRPointer != -1) {
+                int idx = e.findPointerIndex(stickRPointer);
+                if (idx >= 0) updateStick(false, e.getX(idx), e.getY(idx));
             }
             if (discPointer != -1) {
                 int idx = e.findPointerIndex(discPointer);
@@ -1173,6 +1695,24 @@ public final class GamepadView extends View {
                 invalidate();
                 return true;
             }
+            removeCallbacks(editPress);
+            blankPressed = false;
+            if (pointerId == stickLPointer) {
+                stickLPointer = -1;
+                lx = 0;
+                ly = 0;
+                send();
+                invalidate();
+                return true;
+            }
+            if (pointerId == stickRPointer) {
+                stickRPointer = -1;
+                rx = 0;
+                ry = 0;
+                send();
+                invalidate();
+                return true;
+            }
             Btn btn = pointers.remove(pointerId);
             if (btn != null && countPointers(btn) == 0) {
                 btn.pressed = false;
@@ -1195,8 +1735,16 @@ public final class GamepadView extends View {
             tpChipPressed = false;
             navPressed = -1;
             removeCallbacks(holdLongPress);
+            removeCallbacks(editPress);
+            blankPressed = false;
             holdPressed = false;
             holdDragging = false;
+            stickLPointer = -1;
+            stickRPointer = -1;
+            lx = 0;
+            ly = 0;
+            rx = 0;
+            ry = 0;
             invalidate();
             send();
             return true;
@@ -1380,11 +1928,23 @@ public final class GamepadView extends View {
 
     private void send() {
         if (hid == null) return;
-        if (padType == PAD_DISC) {
-            hid.sendGamepadWithHat(mask, discHat);
-        } else {
-            hid.sendGamepad(mask);
-        }
+        int hat = padType == PAD_DISC ? discHat : hatFromMask(mask);
+        hid.sendGamepadFull(mask, hat, lx, ly, rx, ry);
+    }
+
+    /** Hat value for the four d-pad bits (same encoding the HID manager uses). */
+    private static int hatFromMask(int buttons) {
+        int dx = 0;
+        int dy = 0;
+        if ((buttons & HidConstants.GP_RIGHT) != 0) dx += 1;
+        if ((buttons & HidConstants.GP_LEFT) != 0) dx -= 1;
+        if ((buttons & HidConstants.GP_DOWN) != 0) dy += 1;
+        if ((buttons & HidConstants.GP_UP) != 0) dy -= 1;
+        if (dx == 0 && dy == 0) return HAT_NEUTRAL;
+        if (dx == 0) return dy > 0 ? 4 : 0;
+        if (dy == 0) return dx > 0 ? 2 : 6;
+        if (dx > 0) return dy < 0 ? 1 : 3;
+        return dy > 0 ? 5 : 7;
     }
 
     // -------------------------------------------------------------- settings
@@ -1394,6 +1954,7 @@ public final class GamepadView extends View {
         final Context ctx = getContext();
         final Dialog dialog = new Dialog(ctx);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        final int originalLayout = layoutMode;
         final int originalType = padType;
         final float originalPadScale = padScale;
         final float originalBtnScale = btnScale;
@@ -1422,7 +1983,25 @@ public final class GamepadView extends View {
             typeHolder[0] = which == 0 ? PAD_BUTTONS : PAD_DISC;
             setPadType(typeHolder[0]);
         });
-        addOption(box, ctx, "移动盘类型", typeRow, land, 16);
+        final int[] layoutHolder = {layoutMode};
+        LinearLayout layoutRow = segment(ctx, new String[]{"浮键", "皮肤"}, layoutMode == LAYOUT_SKIN ? 1 : 0, which -> {
+            layoutHolder[0] = which == 0 ? LAYOUT_FLOAT : LAYOUT_SKIN;
+            setLayoutMode(layoutHolder[0]);
+        });
+        addOption(box, ctx, "布局", layoutRow, land, land ? 10 : 16);
+
+        TextView editEntry = new TextView(ctx);
+        editEntry.setText("编辑布局 · 拖动按键改位置");
+        editEntry.setTextColor(Ui.ACCENT);
+        editEntry.setTextSize(12);
+        editEntry.setPadding(0, dpi(land ? 6 : 10), 0, 0);
+        editEntry.setOnClickListener(v -> {
+            dialog.dismiss();
+            setEditing(true);
+        });
+        box.addView(editEntry);
+
+        addOption(box, ctx, "移动盘类型", typeRow, land, land ? 8 : 14);
 
         LinearLayout.LayoutParams padLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -1491,6 +2070,7 @@ public final class GamepadView extends View {
         cancel.setGravity(Gravity.CENTER);
         cancel.setPadding(dpi(14), dpi(9), dpi(14), dpi(9));
         cancel.setOnClickListener(v -> {
+            setLayoutMode(originalLayout);
             setPadType(originalType);
             setPadScale(originalPadScale);
             setBtnScale(originalBtnScale);

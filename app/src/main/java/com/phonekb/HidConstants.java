@@ -64,6 +64,8 @@ public final class HidConstants {
     public static final int GP_UP = 0x0001, GP_DOWN = 0x0002, GP_LEFT = 0x0004, GP_RIGHT = 0x0008;
     public static final int GP_A = 0x0010, GP_B = 0x0020, GP_X = 0x0040, GP_Y = 0x0080;
     public static final int GP_L1 = 0x0100, GP_R1 = 0x0200;
+    /** Analog triggers, sent as HID buttons 9 and 10 (BTN_TL2 / BTN_TR2). */
+    public static final int GP_L2 = 0x1000, GP_R2 = 0x2000;
     public static final int GP_SELECT = 0x0400, GP_START = 0x0800;
 
     /**
@@ -90,7 +92,13 @@ public final class HidConstants {
             // A logical max of 8 makes some Linux/Android HID stacks shift every position
             // by one, so the d-pad pressed up when right was intended.
             "05 01 09 05 A1 01 85 04 15 00 25 07 35 00 46 3B 01 65 14 09 39 95 01 75 04" +
-            "81 42 95 01 75 04 81 03 05 09 19 01 29 10 15 00 25 01 95 10 75 01 81 02 C0");
+            // Buttons 1-16 (Linux: BTN_GAMEPAD, BTN_EAST, BTN_C, BTN_NORTH, BTN_WEST, BTN_Z,"
+            // BTN_TL, BTN_TR, BTN_TL2, BTN_TR2, BTN_SELECT, BTN_START, ...) and then the four stick
+            // axes X / Y / Rx / Ry as signed bytes (-127..127), so the skin layout can have real
+            // analog sticks. Hosts cache the descriptor from pairing, so a host that paired an older
+            // build must forget the device and pair again before the axes show up.
+            "81 42 95 01 75 04 81 03 05 09 19 01 29 10 15 00 25 01 95 10 75 01 81 02"
+            + "05 01 09 30 09 31 09 33 09 34 15 81 25 7F 75 08 95 04 81 02 C0");
 
     private static byte[] hex(String s) {
         String compact = s.replace(" ", "").replace("\n", "").replace("\r", "");

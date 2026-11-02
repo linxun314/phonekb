@@ -516,11 +516,27 @@ public final class HidManager {
      * (the plain {@link #sendGamepad(int)} derives the hat only from d-pad bits).
      */
     public void sendGamepadWithHat(int buttons, int hat) {
-        byte[] r = new byte[3];
+        sendGamepadFull(buttons, hat, stickLx, stickLy, stickRx, stickRy);
+    }
+
+    /**
+     * Full gamepad report: hat, 16 buttons and the four stick axes. The last stick values are kept
+     * so that pressing a face button does not recentre a stick the thumb is still holding.
+     */
+    public void sendGamepadFull(int buttons, int hat, int lx, int ly, int rx, int ry) {
+        stickLx = clamp(lx);
+        stickLy = clamp(ly);
+        stickRx = clamp(rx);
+        stickRy = clamp(ry);
+        byte[] r = new byte[7];
         r[0] = (byte) (encodeHat(hat) & 0x0F);
         int mask = buttonMask(buttons);
         r[1] = (byte) (mask & 0xFF);
         r[2] = (byte) ((mask >> 8) & 0xFF);
+        r[3] = (byte) stickLx;
+        r[4] = (byte) stickLy;
+        r[5] = (byte) stickRx;
+        r[6] = (byte) stickRy;
         send(HidConstants.REPORT_GAMEPAD, r);
     }
 
@@ -548,6 +564,9 @@ public final class HidManager {
         return HAT_COMPAT[hat];
     }
 
+    /** Latest stick positions, so a button press never recentres a held stick. */
+    private volatile int stickLx, stickLy, stickRx, stickRy;
+
     private static int buttonMask(int buttons) {
         int mask = 0;
         if ((buttons & HidConstants.GP_A) != 0) mask |= 0x0001;      // button 1  -> BTN_GAMEPAD (A)
@@ -556,6 +575,8 @@ public final class HidManager {
         if ((buttons & HidConstants.GP_Y) != 0) mask |= 0x0010;      // button 5  -> BTN_WEST (Y)
         if ((buttons & HidConstants.GP_L1) != 0) mask |= 0x0040;     // button 7  -> BTN_TL (L1)
         if ((buttons & HidConstants.GP_R1) != 0) mask |= 0x0080;     // button 8  -> BTN_TR (R1)
+        if ((buttons & HidConstants.GP_L2) != 0) mask |= 0x0100;     // button 9  -> BTN_TL2 (L2)
+        if ((buttons & HidConstants.GP_R2) != 0) mask |= 0x0200;     // button 10 -> BTN_TR2 (R2)
         if ((buttons & HidConstants.GP_SELECT) != 0) mask |= 0x0400; // button 11 -> BTN_SELECT
         if ((buttons & HidConstants.GP_START) != 0) mask |= 0x0800;  // button 12 -> BTN_START
         return mask;
@@ -563,7 +584,7 @@ public final class HidManager {
 
     /** Debug helper: sends a raw hat switch value (0-7, 0x0F = centred) with no buttons. */
     public void sendGamepadHat(int hat) {
-        byte[] r = new byte[3];
+        byte[] r = new byte[7];
         r[0] = (byte) hat;
         send(HidConstants.REPORT_GAMEPAD, r);
     }
