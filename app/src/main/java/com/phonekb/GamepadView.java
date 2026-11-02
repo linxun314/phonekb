@@ -18,6 +18,7 @@ import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
 
@@ -666,9 +667,12 @@ public final class GamepadView extends View {
         final float originalBtnScale = btnScale;
         final boolean originalCompat = hatCompat;
 
+        final boolean land = getResources().getConfiguration().orientation
+                == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
+
         LinearLayout box = new LinearLayout(ctx);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dpi(20), dpi(18), dpi(20), dpi(16));
+        box.setPadding(dpi(20), land ? dpi(12) : dpi(18), dpi(20), land ? dpi(10) : dpi(16));
         box.setBackground(Ui.rounded(ctx, Ui.SURFACE, 22));
 
         TextView title = new TextView(ctx);
@@ -696,19 +700,19 @@ public final class GamepadView extends View {
 
         LinearLayout.LayoutParams padLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        padLp.topMargin = dpi(14);
+        padLp.topMargin = land ? dpi(9) : dpi(14);
         box.addView(settingsLabel(ctx, "移动盘大小"), padLp);
         box.addView(sliderRow(ctx, padScale, this::setPadScale));
 
         LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        btnLp.topMargin = dpi(12);
+        btnLp.topMargin = land ? dpi(7) : dpi(12);
         box.addView(settingsLabel(ctx, "按键大小（ABXY / 肩键 / 菜单键）"), btnLp);
         box.addView(sliderRow(ctx, btnScale, this::setBtnScale));
 
         LinearLayout.LayoutParams compatLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        compatLp.topMargin = dpi(14);
+        compatLp.topMargin = land ? dpi(9) : dpi(14);
         box.addView(settingsLabel(ctx, "方向键方向"), compatLp);
 
         final boolean[] compatHolder = {hatCompat};
@@ -723,14 +727,15 @@ public final class GamepadView extends View {
         box.addView(compatRow, compatRowLp);
 
         TextView hint = new TextView(ctx);
-        hint.setText("只缩放按键本身，不改变页面布局；圆盘：按住并滑动选择方向，松手回中\n" +
-                "方向键按左却出下 / 方向整体偏一格：多是平板缓存了旧的蓝牙描述，重新配对可根治；" +
-                "暂时不想重配就把这里改成「修正一格」（左上斜向会退化成左）");
+        hint.setText(land
+                ? "只缩放按键本身。方向键偏一格时改成「修正一格」。"
+                : "只缩放按键本身，不改页面布局。圆盘：按住滑动选方向，松手回中。\n"
+                + "方向键整体偏一格（按左出下）：平板缓存了旧的蓝牙描述，重新配对可根治；临时办法改成「修正一格」。");
         hint.setTextColor(Ui.TEXT_DIM);
         hint.setTextSize(11);
         LinearLayout.LayoutParams hintLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        hintLp.topMargin = dpi(10);
+        hintLp.topMargin = land ? dpi(6) : dpi(10);
         box.addView(hint, hintLp);
 
         LinearLayout buttons = new LinearLayout(ctx);
@@ -738,7 +743,7 @@ public final class GamepadView extends View {
         buttons.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams buttonsLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        buttonsLp.topMargin = dpi(14);
+        buttonsLp.topMargin = land ? dpi(8) : dpi(14);
         TextView cancel = new TextView(ctx);
         cancel.setText("取消");
         cancel.setTextColor(Ui.TEXT_DIM);
@@ -773,7 +778,12 @@ public final class GamepadView extends View {
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         box.addView(buttons, buttonsLp);
 
-        dialog.setContentView(box);
+        // Landscape has very little vertical room, so allow the whole panel to scroll instead of
+        // clipping the hint text at the bottom.
+        ScrollView scroller = new ScrollView(ctx);
+        scroller.setFillViewport(false);
+        scroller.addView(box);
+        dialog.setContentView(scroller);
         Window window = dialog.getWindow();
         if (window != null) {
             window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
