@@ -1267,9 +1267,48 @@ public final class GamepadView extends View {
                 send();
             }, minGap - (now - lastStickSendAt));
         }
-        // Fast mode: the knob position is cosmetic, so skip the redraw (60-160 Hz) and save the
-        // whole frame for the next real key press.
-        if (!fastMode) invalidate();
+        // Fast mode used to skip this redraw, which left the knob frozen while the axes kept moving.
+        // Redraw just the stick's own rect instead: cheap enough for fast mode, and the knob follows.
+        invalidateStick(isLeft);
+    }
+
+    /** Redraw one stick's own area (cheap), including the room the knob travels through. */
+    private void invalidateStick(boolean isLeft) {
+        invalidateStickArea(isLeft ? stickLRect : stickRRect);
+    }
+
+    private void invalidateStickArea(RectF area) {
+        if (area.isEmpty()) {
+            invalidate();
+            return;
+        }
+        int margin = (int) dp(16);
+        invalidate((int) area.left - margin, (int) area.top - margin,
+                (int) area.right + margin, (int) area.bottom + margin);
+    }
+
+    /** The tracked finger vanished (up event swallowed, window lost focus): recentre, never freeze. */
+    private void resetStick(boolean isLeft) {
+        if (isLeft) {
+            stickLPointer = -1;
+            lx = 0;
+            ly = 0;
+        } else {
+            stickRPointer = -1;
+            rx = 0;
+            ry = 0;
+        }
+        send();
+        invalidateStick(isLeft);
+    }
+
+    private void resetPadStick() {
+        padStickPointer = -1;
+        padStickHat = HAT_NEUTRAL;
+        lx = 0;
+        ly = 0;
+        send();
+        invalidateStickArea(discRect);
     }
 
     /**
@@ -1319,7 +1358,7 @@ public final class GamepadView extends View {
                 send();
             }, minGap - (now - lastStickSendAt));
         }
-        if (!fastMode) invalidate();
+        invalidateStickArea(discRect);
     }
 
     /**
@@ -2165,7 +2204,7 @@ public final class GamepadView extends View {
             if (!tpOpen && touchMode == TOUCH_PANEL && inTouchArea(e.getX(), e.getY())) {
                 removeCallbacks(editPress);
                 blankPressed = false;
-                startTouchPad(e, 0);
+                startTouchPad(e, e.getActionIndex());
                 return true;
             }
             if (!tpOpen && touchMode == TOUCH_OFF && !inTouchArea(e.getX(), e.getY())
@@ -2280,9 +2319,10 @@ public final class GamepadView extends View {
                 invalidate();
                 return true;
             }
+            // The in-page touch pad only owns its own pointer: other fingers must keep feeding the
+            // sticks and buttons, otherwise a stray finger freezes the joystick mid-game.
             if (tpMode == TP_PAD) {
                 handleTouchPadMove(e);
-                return true;
             }
             if (blankPressed) {
                 removeCallbacks(editPress);
@@ -2291,14 +2331,17 @@ public final class GamepadView extends View {
             if (stickLPointer != -1) {
                 int idx = e.findPointerIndex(stickLPointer);
                 if (idx >= 0) updateStick(true, e.getX(idx), e.getY(idx));
+                else resetStick(true);
             }
             if (stickRPointer != -1) {
                 int idx = e.findPointerIndex(stickRPointer);
                 if (idx >= 0) updateStick(false, e.getX(idx), e.getY(idx));
+                else resetStick(false);
             }
             if (padStickPointer != -1) {
                 int idx = e.findPointerIndex(padStickPointer);
                 if (idx >= 0) updatePadStick(e.getX(idx), e.getY(idx));
+                else resetPadStick();
             }
             if (discPointer != -1) {
                 int idx = e.findPointerIndex(discPointer);

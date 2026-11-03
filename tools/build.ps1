@@ -3,8 +3,8 @@ param(
     [string]$Module = "app",
     [string]$PackageName = "com.phonekb",
     [string]$OutName = "PhoneKB",
-    [string]$VersionName = "0.36.1",
-    [int]$VersionCode = 57,
+    [string]$VersionName = "0.36.2",
+    [int]$VersionCode = 59,
     [int]$MinSdk = 28,
     [int]$TargetSdk = 36
 )
@@ -12,7 +12,7 @@ param(
 #   app -> build\PhoneKB.apk
 # Usage:
 #   .\tools\build.ps1 -Clean
-#   .\tools\build.ps1 -Clean -VersionName 0.36.1 -VersionCode 58
+#   .\tools\build.ps1 -Clean -VersionName 0.36.2 -VersionCode 59
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $sdk = if ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT } elseif ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { Join-Path $env:LOCALAPPDATA "Android\Sdk" }

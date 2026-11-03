@@ -29,7 +29,6 @@ public final class PointerSettings {
     private static final String KEY_CLICK_DOWN = "ptr_click_down";
     private static final String KEY_LONG_PRESS = "ptr_long_press";
     private static final String KEY_FAST = "ptr_fast";
-    private static final String KEY_MEDIA_ARROW = "media_skip_arrow";
     private static final String KEY_MEDIA_HOLD = "media_hold_mode";
     private static final String KEY_MEDIA_BOOST = "media_boost";
     private static final String KEY_LT_COMPAT = "gp_lt_compat";
@@ -41,7 +40,6 @@ public final class PointerSettings {
     private static boolean clickDown = false;
     private static int longPressMs = LONG_PRESS_DEFAULT;
     private static boolean fast = true;
-    private static boolean mediaSkipArrow = false;
     private static int mediaHoldMode = PointerSettings.MEDIA_HOLD_SEEK;
     private static boolean mediaBoost = true;
     private static boolean ltCompat = false;
@@ -70,7 +68,6 @@ public final class PointerSettings {
         clickDown = p.getBoolean(KEY_CLICK_DOWN, false);
         longPressMs = clampLongPress(p.getInt(KEY_LONG_PRESS, LONG_PRESS_DEFAULT));
         fast = p.getBoolean(KEY_FAST, true);
-        mediaSkipArrow = p.getBoolean(KEY_MEDIA_ARROW, false);
         mediaHoldMode = p.getInt(KEY_MEDIA_HOLD, MEDIA_HOLD_SEEK) == MEDIA_HOLD_TRACK
                 ? MEDIA_HOLD_TRACK : MEDIA_HOLD_SEEK;
         mediaBoost = p.getBoolean(KEY_MEDIA_BOOST, true);
@@ -103,11 +100,6 @@ public final class PointerSettings {
     /** Fast mode: skip repaints / haptics while the finger is moving, to save UI-thread time. */
     public static boolean fast() {
         return fast;
-    }
-
-    /** What the media page -10s / +10s keys send: true = Left/Right arrows, false = prev/next track. */
-    public static boolean mediaSkipArrow() {
-        return mediaSkipArrow;
     }
 
     /** What a long press on the media page rewind / fast-forward keys does. */
@@ -168,12 +160,6 @@ public final class PointerSettings {
         init(context);
         fast = value;
         prefs(context).edit().putBoolean(KEY_FAST, value).apply();
-    }
-
-    public static void setMediaSkipArrow(Context context, boolean value) {
-        init(context);
-        mediaSkipArrow = value;
-        prefs(context).edit().putBoolean(KEY_MEDIA_ARROW, value).apply();
     }
 
     public static void setMediaHoldMode(Context context, int value) {

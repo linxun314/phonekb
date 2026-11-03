@@ -107,6 +107,16 @@ public class MediaView extends View {
 
     private BrightnessListener brightnessListener;
 
+    /** 1 = arrow keys (default), 2 = rewind / fast-forward. Debug intent can switch it. */
+    private static final int SEEK_ARROW = 1;
+    private static final int SEEK_CONSUMER = 2;
+    private static int seekImpl = SEEK_ARROW;
+
+    /** Debug-only hook (`--ei seek 2`) so the seek key can be swapped without a rebuild. */
+    public static void setSeekImpl(int impl) {
+        seekImpl = impl == SEEK_CONSUMER ? SEEK_CONSUMER : SEEK_ARROW;
+    }
+
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable repeatBar = new Runnable() {
         @Override
@@ -350,12 +360,12 @@ public class MediaView extends View {
         pressedPill = -1;
     }
 
-    /** -10s / +10s: either player seek step (prev/next track usages) or the arrow keys. */
+    /** -10s / +10s: player seek only — the arrow keys (REWIND / FAST_FORWARD as a debug fallback). */
     private void tapSkip(boolean forward) {
-        if (PointerSettings.mediaSkipArrow()) {
-            hid.tapKey(0, forward ? HidConstants.KEY_RIGHT : HidConstants.KEY_LEFT);
+        if (seekImpl == SEEK_CONSUMER) {
+            hid.tapConsumer(forward ? HidConstants.CONSUMER_FAST_FORWARD : HidConstants.CONSUMER_REWIND);
         } else {
-            hid.tapConsumer(forward ? HidConstants.CONSUMER_NEXT_TRACK : HidConstants.CONSUMER_PREV_TRACK);
+            hid.tapKey(0, forward ? HidConstants.KEY_RIGHT : HidConstants.KEY_LEFT);
         }
     }
 

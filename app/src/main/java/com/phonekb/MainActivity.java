@@ -261,7 +261,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         footer = new TextView(this);
-        footer.setText("PhoneKB v0.36.1 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手");
+        footer.setText("PhoneKB v0.36.2 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手");
         footer.setTextColor(Ui.TEXT_DIM);
         footer.setTextSize(11);
         footer.setGravity(Gravity.CENTER);
@@ -1197,9 +1197,9 @@ public class MainActivity extends Activity {
                         + "电脑布局：顶部一排快捷键 Ctrl+C / Ctrl+V / Ctrl+X / Ctrl+A / Alt+Tab，下面带 Tab、方向键和 Ctrl / Alt / Win，适合敲命令、远程桌面和组合键。\n\n"
                         + "指针灵敏度：触控板页触控卡片左上角的「灵敏度 1.0x」胶囊可以打开设置——指针速度 0.4x–2.5x（1.0x 就是以前的手感）、加速度（快扫自动加速）、滚轮速度（一次滑动滚几行）；改完对触控板页、单手遥控台、触控板浮层、手柄页触控区同时生效，并且会记住。\n\n"
                         + "触控板：单指滑动移动指针，单指点击=左键，双指点击=右键，双指上下滑=滚动，右侧 ↑↓ 按住连续滚动；左侧「数字」弹出数字键盘（输入密码），「键盘」弹出简易手机键盘（带数字行，数字也可用来选输入法的候选词），「菜单」等于平板菜单键。\n\n"
-                        + "媒体页：从上到下是「触控板」快键、媒体卡和常用键卡。媒体卡第一排三个大方键：上一段 ⏮ / 播放暂停 ⏯ / 下一段 ⏭；第二排两个长条：−10s / ＋10s，点一次退或进 10 秒，按住连发（长按约 0.4 秒后每 0.1 秒发一次），上一段 / 下一段键按住也会连续跳。\n\n"
+                        + "媒体页：从上到下是「触控板」快键、媒体卡和常用键卡。媒体卡第一排三个大方键：上一段 ⏮ / 播放暂停 ⏯ / 下一段 ⏭；第二排两个长条：−10s / ＋10s，发的是方向键 ← / →，点一次快退或快进 10 秒，按住连续快退 / 快进（长按约 0.4 秒后每 0.1 秒发一次），上一段 / 下一段键按住也会连续跳。\n\n"
                         + "常用键卡是 2 行 × 5 列的圆形大键：第一排 音量+ / 音量− / 静音 / 截屏 / 多任务，第二排 亮度− / 亮度+ / 返回 / 主页 / 菜单。截屏发的是蓝牙键盘的 PrintScreen 键，Android 会直接截屏；多任务发 Alt+Tab（系统「切换应用」快捷键）。\n\n"
-                        + "「帮助 → 更多设置」里可以调：指针点击方式（抬手点击 / 按下即点）、长按拖拽阈值（250 / 350 / 450 ms）、媒体页 −10s / ＋10s 发什么（上一段·下一段，或 ← / → 方向键——有些播放器只认方向键）、极速模式（少震动、移动中不重绘，更跟手）、界面大小，以及指针延迟测量。\n\n"
+                        + "「帮助 → 更多设置」里可以调：指针点击方式（抬手点击 / 按下即点）、长按拖拽阈值（250 / 350 / 450 ms）、极速模式（少震动、移动中不重绘，更跟手）、界面大小，以及指针延迟测量。\n\n"
                         + "手柄：左上的「移动盘」按钮打开设置，里有三个段：「布局」可选 浮键 / 皮肤；「移动盘类型」按键 / 圆盘 / 摇杆；「移动盘大小」「按键大小」两个 60%–150% 滑块（只缩放按键本身）。浮键＝现在这套：左下方向盘、右下 X/Y/A/B、两侧中段 L1/R1、菜单键在顶部条；皮肤＝整机手柄外观：圆角机身 + 十字键圆环 + ABXY 圆环 + LB/LT/RB/RT + 左右 L/R 模拟摇杆（摇杆是 4 个轴，换新版后平板要「忘记设备→重新配对」一次才会识别）+ 居中的 SELECT/START。自定义位置：在设置里点「编辑布局·拖动按键改位置」，或者在手柄页空白处按住 3 秒，进入编辑模式后每个键出现蓝虚线框，单指拖动即可挪位置，松手自动保存；顶部有「重置 / 完成」，横屏和竖屏各存一套。「触控」小键一键切换 关 / 中间 / 全屏：中间＝页面正中一块看得见边界的触控板；全屏＝除按键外整片空白都能触控。触控板手势和「触控板」页一致：单指移动、轻点＝左键、双指点击＝右键、双指上下滑＝滚动；「只移动」档位下只移指针不点击。浮键布局下也有一行四个肩键：L1 / LT（左）与 RT / R1（右），皮肤布局则是 LB/LT/RB/RT；如果老游戏只认 L1/R1、不认 LT/RT，可以在「帮助 → 更多设置 → 手柄 LT / RT 兼容」打开，让 LT/RT 同时发 L1/R1。移动盘类型选「摇杆」时，整块圆盘都能按、摇杆头跟手，推的是左摇杆 X/Y 模拟轴；只有当游戏只认方向键时才把「摇杆同时发方向键」打开（打开后左上斜向会退化成左）。\n\n"
                         + "手柄页触控板浮层：右上角的「触控板」小键点一下，右侧浮出一块触控板浮层（单指移动、轻点＝左键、双指点击＝右键、双指滑＝滚动），右下角竖排是 返回 / 主页 / 后台。点浮层外面的任何地方就会收起，左半屏的方向盘和 ABXY 照样能按；再点一次「触控板」收起。浮层左上角有个「⇔」把手：按住约 0.3 秒后左右拖动可以挪动整块浮层的位置，松手就记住，下次打开还在那儿。\n\n"
                         + "双手模式：左边是触控板，右边是按键板（从上到下：音量、媒体、返回 / 主页 / 后台、数字 / 键盘），左右手各管一半。双手页顶部有「互换」键：点一下把触控区和按键区对调（横屏左右对调，竖屏上下对调），方便左右手习惯不同的人；互换状态会记住。\n\n"
@@ -1254,11 +1254,6 @@ public class MainActivity extends Activity {
         }
         addSettingsChoice(box, new String[]{"250 ms", "350 ms（默认）", "450 ms"}, pressIndex,
                 index -> PointerSettings.setLongPressMs(this, pressValues[index]));
-
-        addSettingsLabel(box, "媒体页 ±10s 键发什么");
-        addSettingsChoice(box, new String[]{"上一段 / 下一段", "← / → 方向键"},
-                PointerSettings.mediaSkipArrow() ? 1 : 0,
-                index -> PointerSettings.setMediaSkipArrow(this, index == 1));
 
         addSettingsLabel(box, "手柄 LT / RT 兼容（同时发 L1 / R1）");
         addSettingsChoice(box, new String[]{"关（默认）", "开（老游戏只认 L1/R1）"},
@@ -1572,6 +1567,10 @@ public class MainActivity extends Activity {
         }
         if (gamepadView != null && intent.hasExtra("gptpoff")) {
             gamepadView.setTouchpadOffsetDp(intent.getIntExtra("gptpoff", 0));
+        }
+        // Debug/test hook: 1 = arrow keys (default), 2 = rewind / fast-forward for the media ±10s keys.
+        if (intent.hasExtra("seek")) {
+            MediaView.setSeekImpl(intent.getIntExtra("seek", 1));
         }
         // Debug/test hook: emit a fixed gamepad sequence so the host input events can be captured
         // with "adb shell getevent" (adb cannot tap the on-screen gamepad).
