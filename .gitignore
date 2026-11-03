@@ -1,7 +1,6 @@
 # Build outputs
 /build/
 /app/build/
-/companion/build/
 .gradle/
 local.properties
 *.apk

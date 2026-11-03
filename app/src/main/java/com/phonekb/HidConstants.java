@@ -39,6 +39,8 @@ public final class HidConstants {
     public static final int KEY_INSERT = 0x49, KEY_HOME = 0x4A, KEY_PAGE_UP = 0x4B,
             KEY_DELETE = 0x4C, KEY_END = 0x4D, KEY_PAGE_DOWN = 0x4E,
             KEY_RIGHT = 0x4F, KEY_LEFT = 0x50, KEY_DOWN = 0x51, KEY_UP = 0x52;
+    /** Print Screen / SysRq: Android turns this into a system screenshot. */
+    public static final int KEY_SYSRQ = 0x46;
 
     public static final int CONSUMER_PLAY_PAUSE = 0x00CD;
     public static final int CONSUMER_NEXT_TRACK = 0x00B5;
@@ -76,6 +78,14 @@ public final class HidConstants {
      * with that app keep its descriptor cached in the Bluetooth stack, so using the
      * same layout means our reports are decoded correctly even before re-pairing.
      */
+    /** X, Y, Rx, Ry as signed bytes. */
+    private static final String AXES_4 =
+            "05 01 09 30 09 31 09 33 09 34 15 81 25 7F 75 08 95 04 81 02 C0";
+
+    /** X, Y, Rx, Ry, Z, Rz as signed bytes (right stick also available as Z / Rz). */
+    private static final String AXES_6 =
+            "05 01 09 30 09 31 09 33 09 34 09 32 09 35 15 81 25 7F 75 08 95 06 81 02 C0";
+
     public static final byte[] REPORT_DESCRIPTOR = hex(
             // Consumer control: report id 2, one 16-bit usage
             "05 0C 09 01 A1 01 85 02 15 00 26 FF 03 19 00 2A FF 03 75 10 95 01 81 00 C0" +
@@ -98,7 +108,24 @@ public final class HidConstants {
             // analog sticks. Hosts cache the descriptor from pairing, so a host that paired an older
             // build must forget the device and pair again before the axes show up.
             "81 42 95 01 75 04 81 03 05 09 19 01 29 10 15 00 25 01 95 10 75 01 81 02"
-            + "05 01 09 30 09 31 09 33 09 34 15 81 25 7F 75 08 95 04 81 02 C0");
+            + AXES_4);
+
+    /**
+     * Same composite descriptor, but the right stick is exposed as Z / Rz instead of Rx / Ry.
+     * Some older controllers (and a few games) read the camera stick from AXIS_Z / AXIS_RZ, so the
+     * gamepad settings offer this as an opt-in compatibility mode. Changing it changes the report
+     * length, and Android caches the descriptor from pairing - so switching requires re-pairing.
+     */
+    public static final byte[] REPORT_DESCRIPTOR_RZ = hex(
+            "05 0C 09 01 A1 01 85 02 15 00 26 FF 03 19 00 2A FF 03 75 10 95 01 81 00 C0" +
+            "05 01 09 06 A1 01 85 01 05 07 19 E0 29 E7 15 00 25 01 75 01 95 08 81 02" +
+            "19 00 2A FF 00 15 00 26 FF 00 75 08 95 01 81 00 C0" +
+            "05 01 09 02 A1 01 85 03 09 01 A1 00 05 09 19 01 29 03 15 00 25 01 95 03" +
+            "75 01 81 02 95 01 75 05 81 01 05 01 09 30 09 31 09 38 15 81 25 7F 75 08" +
+            "95 03 81 06 C0 C0" +
+            "05 01 09 05 A1 01 85 04 15 00 25 07 35 00 46 3B 01 65 14 09 39 95 01 75 04" +
+            "81 42 95 01 75 04 81 03 05 09 19 01 29 10 15 00 25 01 95 10 75 01 81 02" +
+            AXES_6);
 
     private static byte[] hex(String s) {
         String compact = s.replace(" ", "").replace("\n", "").replace("\r", "");

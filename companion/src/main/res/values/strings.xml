@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">PhoneKB 伴侣</string>
-    <string name="accessibility_label">PhoneKB 伴侣</string>
-    <string name="accessibility_description">接收手机通过局域网发来的文字，并写入当前输入框，实现手机打中文、平板上屏；同时同步剪贴板。所有数据只在本机与手机之间直连，不上传网络。</string>
-</resources>

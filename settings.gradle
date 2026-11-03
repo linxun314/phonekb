@@ -14,4 +14,3 @@ dependencyResolutionManagement {
 }
 rootProject.name = 'PhoneKB'
 include ':app'
-include ':companion'

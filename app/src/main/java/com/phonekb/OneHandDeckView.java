@@ -271,6 +271,17 @@ public class OneHandDeckView extends View {
                         moved = true;
                     }
                 } else {
+                    // Replay every batched sample so fast flicks are not lost.
+                    int hist = e.getHistorySize();
+                    for (int i = 0; i < hist; i++) {
+                        float hx = e.getHistoricalX(0, i);
+                        float hy = e.getHistoricalY(0, i);
+                        float hGain = PointerSettings.gain(getContext(), hx - lastX, hy - lastY);
+                        accumX += (hx - lastX) * hGain;
+                        accumY += (hy - lastY) * hGain;
+                        lastX = hx;
+                        lastY = hy;
+                    }
                     float x = e.getX(0);
                     float y = e.getY(0);
                     float gain = PointerSettings.gain(getContext(), x - lastX, y - lastY);
@@ -281,7 +292,7 @@ public class OneHandDeckView extends View {
                     int dx = (int) accumX;
                     int dy = (int) accumY;
                     if (dx != 0 || dy != 0) {
-                        hid.mouseMove(dx, dy);
+                        hid.mouseMove(dx, dy, e.getEventTime());
                         accumX -= dx;
                         accumY -= dy;
                     }

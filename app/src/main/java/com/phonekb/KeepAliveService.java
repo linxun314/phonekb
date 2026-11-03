@@ -37,13 +37,6 @@ public class KeepAliveService extends Service {
         } catch (Exception e) {
             Log.w(TAG, "hid start failed", e);
         }
-        try {
-            // The WiFi companion channel shares this process, so it stays reachable
-            // while the app is in the background (same reason the HID lives here).
-            CompanionBridge.get(this).start();
-        } catch (Exception e) {
-            Log.w(TAG, "companion start failed", e);
-        }
     }
 
     private void createChannel() {

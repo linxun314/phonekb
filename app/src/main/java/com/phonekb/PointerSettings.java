@@ -18,15 +18,43 @@ public final class PointerSettings {
     public static final int ROWS_MAX = 6;
     public static final int ROWS_DEFAULT = 3;
 
+    public static final int LONG_PRESS_MIN = 250;
+    public static final int LONG_PRESS_MAX = 600;
+    public static final int LONG_PRESS_DEFAULT = 350;
+
     private static final String PREFS = "phonekb";
     private static final String KEY_SPEED = "ptr_speed";
     private static final String KEY_ROWS = "ptr_rows";
     private static final String KEY_ACCEL = "ptr_accel";
+    private static final String KEY_CLICK_DOWN = "ptr_click_down";
+    private static final String KEY_LONG_PRESS = "ptr_long_press";
+    private static final String KEY_FAST = "ptr_fast";
+    private static final String KEY_MEDIA_ARROW = "media_skip_arrow";
+    private static final String KEY_MEDIA_HOLD = "media_hold_mode";
+    private static final String KEY_MEDIA_BOOST = "media_boost";
+    private static final String KEY_LT_COMPAT = "gp_lt_compat";
+    private static final String KEY_BOOST_POINT = "media_boost_point";
 
     private static float speed = SPEED_DEFAULT;
     private static int rows = ROWS_DEFAULT;
     private static boolean accel = true;
+    private static boolean clickDown = false;
+    private static int longPressMs = LONG_PRESS_DEFAULT;
+    private static boolean fast = true;
+    private static boolean mediaSkipArrow = false;
+    private static int mediaHoldMode = PointerSettings.MEDIA_HOLD_SEEK;
+    private static boolean mediaBoost = true;
+    private static boolean ltCompat = false;
+    private static int boostPoint = 1;
     private static boolean loaded;
+
+    /** Rewind / fast-forward keys hold down the real consumer key (players keep seeking). */
+    public static final int MEDIA_HOLD_SEEK = 0;
+    /** Rewind / fast-forward keys repeat previous / next track (players that seek in steps). */
+    public static final int MEDIA_HOLD_TRACK = 1;
+
+    /** Park spots (host pixels) for the 2x key: it presses the screen at a fixed, safe place. */
+    private static final int[][] BOOST_POINTS = {{420, 460}, {420, 820}, {430, 1180}};
 
     private PointerSettings() {
     }
@@ -39,6 +67,15 @@ public final class PointerSettings {
         speed = clampSpeed(p.getFloat(KEY_SPEED, SPEED_DEFAULT));
         rows = clampRows(p.getInt(KEY_ROWS, ROWS_DEFAULT));
         accel = p.getBoolean(KEY_ACCEL, true);
+        clickDown = p.getBoolean(KEY_CLICK_DOWN, false);
+        longPressMs = clampLongPress(p.getInt(KEY_LONG_PRESS, LONG_PRESS_DEFAULT));
+        fast = p.getBoolean(KEY_FAST, true);
+        mediaSkipArrow = p.getBoolean(KEY_MEDIA_ARROW, false);
+        mediaHoldMode = p.getInt(KEY_MEDIA_HOLD, MEDIA_HOLD_SEEK) == MEDIA_HOLD_TRACK
+                ? MEDIA_HOLD_TRACK : MEDIA_HOLD_SEEK;
+        mediaBoost = p.getBoolean(KEY_MEDIA_BOOST, true);
+        ltCompat = p.getBoolean(KEY_LT_COMPAT, false);
+        boostPoint = clampPoint(p.getInt(KEY_BOOST_POINT, 1));
     }
 
     public static float speed() {
@@ -51,6 +88,50 @@ public final class PointerSettings {
 
     public static boolean accel() {
         return accel;
+    }
+
+    /** True = send the click on finger-down instead of finger-up (feels a bit snappier). */
+    public static boolean clickDown() {
+        return clickDown;
+    }
+
+    /** How long the finger must rest before a drag starts (ms). */
+    public static int longPressMs() {
+        return longPressMs;
+    }
+
+    /** Fast mode: skip repaints / haptics while the finger is moving, to save UI-thread time. */
+    public static boolean fast() {
+        return fast;
+    }
+
+    /** What the media page -10s / +10s keys send: true = Left/Right arrows, false = prev/next track. */
+    public static boolean mediaSkipArrow() {
+        return mediaSkipArrow;
+    }
+
+    /** What a long press on the media page rewind / fast-forward keys does. */
+    public static int mediaHoldMode() {
+        return mediaHoldMode;
+    }
+
+    /** True = the media bar shows the extra "2x" key used for Douyin-style long-press speed-up. */
+    public static boolean mediaBoost() {
+        return mediaBoost;
+    }
+
+    /** True = LT / RT also send L1 / R1, for games that only map the two shoulder buttons. */
+    public static boolean ltCompat() {
+        return ltCompat;
+    }
+
+    /** Where the 2x key parks the pointer before pressing (host pixels). */
+    public static int boostX() {
+        return BOOST_POINTS[clampPoint(boostPoint)][0];
+    }
+
+    public static int boostY() {
+        return BOOST_POINTS[clampPoint(boostPoint)][1];
     }
 
     public static void setSpeed(Context context, float value) {
@@ -69,6 +150,70 @@ public final class PointerSettings {
         init(context);
         accel = value;
         prefs(context).edit().putBoolean(KEY_ACCEL, value).apply();
+    }
+
+    public static void setClickDown(Context context, boolean value) {
+        init(context);
+        clickDown = value;
+        prefs(context).edit().putBoolean(KEY_CLICK_DOWN, value).apply();
+    }
+
+    public static void setLongPressMs(Context context, int value) {
+        init(context);
+        longPressMs = clampLongPress(value);
+        prefs(context).edit().putInt(KEY_LONG_PRESS, longPressMs).apply();
+    }
+
+    public static void setFast(Context context, boolean value) {
+        init(context);
+        fast = value;
+        prefs(context).edit().putBoolean(KEY_FAST, value).apply();
+    }
+
+    public static void setMediaSkipArrow(Context context, boolean value) {
+        init(context);
+        mediaSkipArrow = value;
+        prefs(context).edit().putBoolean(KEY_MEDIA_ARROW, value).apply();
+    }
+
+    public static void setMediaHoldMode(Context context, int value) {
+        init(context);
+        mediaHoldMode = value == MEDIA_HOLD_TRACK ? MEDIA_HOLD_TRACK : MEDIA_HOLD_SEEK;
+        prefs(context).edit().putInt(KEY_MEDIA_HOLD, mediaHoldMode).apply();
+    }
+
+    public static void setMediaBoost(Context context, boolean value) {
+        init(context);
+        mediaBoost = value;
+        prefs(context).edit().putBoolean(KEY_MEDIA_BOOST, value).apply();
+    }
+
+    public static void setLtCompat(Context context, boolean value) {
+        init(context);
+        ltCompat = value;
+        prefs(context).edit().putBoolean(KEY_LT_COMPAT, value).apply();
+    }
+
+    public static void setBoostPoint(Context context, int value) {
+        init(context);
+        boostPoint = clampPoint(value);
+        prefs(context).edit().putInt(KEY_BOOST_POINT, boostPoint).apply();
+    }
+
+    public static int boostPoint() {
+        return clampPoint(boostPoint);
+    }
+
+    private static int clampPoint(int value) {
+        if (value < 0) return 0;
+        if (value > BOOST_POINTS.length - 1) return BOOST_POINTS.length - 1;
+        return value;
+    }
+
+    public static int clampLongPress(int value) {
+        if (value < LONG_PRESS_MIN) return LONG_PRESS_MIN;
+        if (value > LONG_PRESS_MAX) return LONG_PRESS_MAX;
+        return value;
     }
 
     /**

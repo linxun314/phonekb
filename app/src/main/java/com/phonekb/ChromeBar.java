@@ -16,7 +16,7 @@ import java.util.List;
  * A single-row toolbar that gracefully degrades on narrow screens.
  *
  * <p>Children are either {@link #addFixed fixed} (power button, status title, page tabs) or
- * {@link #addCollapsible collapsible} (secondary actions such as 单手/右手/互换/旋转/伴侣/帮助).
+ * {@link #addCollapsible collapsible} (secondary actions such as 单手/右手/互换/旋转/帮助).
  * During measurement the bar first tries to show every child; when the row does not fit it
  * hides collapsible children from the right end and shows a single 「更多」 button that exposes
  * the hidden actions in a popup menu. Because the decision is pure measurement, the same code

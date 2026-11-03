@@ -3,17 +3,16 @@ param(
     [string]$Module = "app",
     [string]$PackageName = "com.phonekb",
     [string]$OutName = "PhoneKB",
-    [string]$VersionName = "0.25.0",
-    [int]$VersionCode = 39,
+    [string]$VersionName = "0.36.1",
+    [int]$VersionCode = 57,
     [int]$MinSdk = 28,
     [int]$TargetSdk = 36
 )
-# Builds one Android module of this repo without Gradle:
-#   app        -> build\PhoneKB.apk             (the phone side)
-#   companion  -> build\PhoneKB-Companion.apk   (the tablet companion app)
+# Builds the Android module of this repo without Gradle:
+#   app -> build\PhoneKB.apk
 # Usage:
 #   .\tools\build.ps1 -Clean
-#   .\tools\build.ps1 -Clean -Module companion -PackageName com.phonekb.companion -OutName PhoneKB-Companion -VersionName 0.1.0 -VersionCode 1
+#   .\tools\build.ps1 -Clean -VersionName 0.36.1 -VersionCode 58
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $sdk = if ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT } elseif ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { Join-Path $env:LOCALAPPDATA "Android\Sdk" }
@@ -35,8 +34,7 @@ $work = Join-Path $build $Module
 if ($Clean -and (Test-Path $work)) { Remove-Item -Recurse -Force $work }
 $gen = Join-Path $work "gen"; $classes = Join-Path $work "classes"; $dexDir = Join-Path $work "dex"
 foreach ($d in @($gen, $classes, $dexDir)) { if (Test-Path $d) { Remove-Item -Recurse -Force $d }; New-Item -ItemType Directory -Force -Path $d | Out-Null }
-# Optional jars under <module>\libs are compiled against and packaged into the APK
-# (e.g. zxing-core for QR pairing). Loopback tests of the build script stay dependency-free.
+# Optional jars under <module>\libs are compiled against and packaged into the APK.
 $libJars = @(Get-ChildItem -Path (Join-Path $project "libs") -Filter *.jar -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
 # The source manifests have no package attribute (required by AGP 8+); aapt2 still needs one,
 # so layer it into a build-local copy instead of keeping two manifests in the repo.

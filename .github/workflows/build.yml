@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    name: Build debug APKs
+    name: Build debug APK
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -47,11 +47,4 @@ jobs:
         with:
           name: PhoneKB-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-
-      - name: Upload companion APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: PhoneKB-Companion-debug-apk
-          path: companion/build/outputs/apk/debug/companion-debug.apk
           if-no-files-found: error

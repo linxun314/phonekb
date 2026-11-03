@@ -25,6 +25,9 @@ public final class Icons {
     public static final int UP_ARROW = 14;
     public static final int DOWN_ARROW = 15;
     public static final int RECENTS = 16;
+    public static final int SCREENSHOT = 17;
+    public static final int SUN_UP = 18;
+    public static final int SUN_DOWN = 19;
 
     /** Draws one icon centered inside the given box, using the paint's color. */
     public static void draw(Canvas canvas, int icon, RectF box, Paint fillPaint) {
@@ -153,6 +156,31 @@ public final class Icons {
                 canvas.drawRoundRect(backCard, 0.08f * s, 0.08f * s, stroke);
                 RectF frontCard = new RectF(cx - 0.14f * s, cy - 0.14f * s, cx + 0.42f * s, cy + 0.42f * s);
                 canvas.drawRoundRect(frontCard, 0.08f * s, 0.08f * s, stroke);
+                break;
+            }
+            case SCREENSHOT: {
+                canvas.drawRoundRect(new RectF(cx - 0.46f * s, cy - 0.30f * s,
+                        cx + 0.46f * s, cy + 0.34f * s), 0.10f * s, 0.10f * s, stroke);
+                canvas.drawCircle(cx - 0.02f * s, cy + 0.02f * s, 0.16f * s, stroke);
+                canvas.drawRoundRect(new RectF(cx + 0.12f * s, cy - 0.38f * s,
+                        cx + 0.32f * s, cy - 0.24f * s), 0.04f * s, 0.04f * s, fillPaint);
+                break;
+            }
+            case SUN_UP:
+            case SUN_DOWN: {
+                float sc = cx - 0.12f * s;
+                canvas.drawCircle(sc, cy, 0.19f * s, stroke);
+                for (int i = 0; i < 8; i++) {
+                    double a = Math.PI * i / 4.0;
+                    float dx = (float) Math.cos(a);
+                    float dy = (float) Math.sin(a);
+                    canvas.drawLine(sc + dx * 0.28f * s, cy + dy * 0.28f * s,
+                            sc + dx * 0.42f * s, cy + dy * 0.42f * s, stroke);
+                }
+                canvas.drawLine(cx + 0.24f * s, cy, cx + 0.46f * s, cy, stroke);
+                if (icon == SUN_UP) {
+                    canvas.drawLine(cx + 0.35f * s, cy - 0.11f * s, cx + 0.35f * s, cy + 0.11f * s, stroke);
+                }
                 break;
             }
             case MENU: {

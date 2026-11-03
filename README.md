@@ -2,7 +2,7 @@
 
 **手机当键盘用 —— 把 Android 手机变成蓝牙键盘 / 触控板 / 媒体遥控器 / 游戏手柄，平板和电脑零安装、免 root。**
 
-再配一个可选的 **WiFi 伴侣**，解决蓝牙 HID 打不出中文、剪贴板不同步、部分平板不认亮度键的问题。
+纯蓝牙 HID：被控端不装任何 App，手机端一个 APK 就是全部。
 
 [![Release](https://img.shields.io/github/v/release/linxun314/phonekb?label=release&color=4C8DFF)](https://github.com/linxun314/phonekb/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/linxun314/phonekb/total?color=3DDC84)](https://github.com/linxun314/phonekb/releases)
@@ -11,7 +11,6 @@
 [![Android](https://img.shields.io/badge/Android-9%2B%20%C2%B7%20API%2028-3DDC84?logo=android&logoColor=white)](#兼容性)
 
 > Turn your Android phone into a Bluetooth HID keyboard / trackpad / media remote / gamepad — the host device needs **zero installation and no root**.
-> An optional WiFi companion app adds Chinese text input, clipboard sync and system brightness control.
 
 实测组合：**Redmi K40（Android 13 / HyperOS）→ iQOO Pad2（Android 14）**。平板只做一次蓝牙配对，之后打开手机 App 就能用。
 
@@ -19,18 +18,16 @@
 
 ---
 
-## 当前版本 v0.25.0
+## 当前版本 v0.36.1
 
 这一版新增 / 打磨的内容（README 只介绍当前版本，旧版本说明不保留）：
 
-- **指针灵敏度可调**：触控板页左上角「灵敏度 1.0x」胶囊 → 指针速度 **0.4×–2.5×** 无级滑块（含慢 / 标准 / 快三档预设）、**加速度**开关、**滚轮速度 1–6 行**；对触控板页 / 单手遥控台 / 键盘页触控板浮层 / 手柄页触控区**同时生效**，改完立即生效并记住，**不需要重新配对**
-- **手柄页三种布局**：浮键（浮在四角）/ 皮肤（整块 Xbox 式机身，深紫灰面 + 白色圆环 + LB/LT/RB/RT + L/R 摇杆）/ 自定义（拖到哪算哪），切换立即生效并记忆，横竖屏各存一套
-- **真模拟摇杆**：L / R 两根摇杆按住拖动输出四轴（-127..127），松手回中；同时新增 LT / RT 键
-- **自定义布局编辑器**：设置里点「编辑布局」或长按空白约 3 秒进入，蓝色虚线框标出每个可拖动元素，拖完松手即存，顶部「重置 / 完成」
-- **手柄页触控板**：中间空白可当触控板（关 / 中间面板 / 整片空白三档），可选「完整（移动+点击）」或「只移动」，另有可拖动位置的触控板浮层（带 返回/主页/后台）
-- **两处修复**：离开手柄页会自动退出编辑模式；触控区优先接管落在它上面的触摸，长按不再误触下层按键
-- **媒体页亮度键**：多数设备用蓝牙 Consumer 键码直接生效；iQOO / vivo 等忽略键码的平板改由 WiFi 伴侣调系统亮度
-- 版本：手机端 **0.25.0**（versionCode 39）/ 伴侣 **0.4.0**（versionCode 4）
+- **手柄页「触控板」浮层的 ↑ ↓ 修好了**：这两颗箭头之前只画了没做触摸判定，点在上一律变成「移动指针」，所以按了没反应；现在上半上滚、下半下滚，按住连发，按下的半边会高亮
+- **移除 WiFi 伴侣**：伴侣模式需要每次扫码配对、平板还要常开无障碍服务，用起来比蓝牙通道麻烦得多；现在整个 App 回到单一通道 —— **纯蓝牙 HID，被控端零安装、免配置**
+- 顶栏不再有「伴侣」入口，底栏版本号同步更新；因为去掉了整套 WiFi 通道、二维码、语音识别和无障碍注入代码，**安装包从 713 KB 降到 481 KB**
+- 中文输入改回最稳的方案：用平板自己的输入法（蓝牙键盘发的是键码，任何输入法的拼音都能用）
+- 上一版（v0.35.0）的伴侣语音输入随之移除；再上一版（v0.34.0）的媒体页重做、手柄 LT/L1/RT 修复等全部保留
+- 版本：手机端 **0.36.1**（versionCode 58）
 
 ## 30 秒了解
 
@@ -38,10 +35,8 @@
 |---|---|
 | 用手机给平板打字、按快捷键 | 手机注册成**标准蓝牙键盘**，平板把它当普通蓝牙键盘用，**平板不装 App** |
 | 用手机当鼠标 | 触控板 + 物理左/中/右键，支持点击、拖动、双指滚动、右键菜单，速度可调（含加速度） |
-| 躺床上刷视频、切歌、调音量、调亮度 | 媒体页：上一首 / 播放暂停 / 下一首 / 音量 ± / 静音 / CC / 亮度 −/＋ / 返回主页菜单电源 |
-| 手机当手柄玩模拟器 | 手柄页：浮键 / Xbox 式皮肤 / 自定义三种布局，移动盘（十字键或圆盘）+ ABXY + L1/R1/LT/RT + SELECT/START + 双模拟摇杆，大小可分别无级调节 |
-| 平板打中文（HID 的天然短板） | 可选 **WiFi 伴侣**：手机上输入中文 → 直接写进平板当前输入框 |
-| 手机复制、平板粘贴 | 可选 **WiFi 伴侣**：剪贴板双向同步 |
+| 躺床上刷视频、拖进度、切歌、调音量、调亮度、截屏 | 媒体页：上一段 / 播放暂停 / 下一段、−10s / ＋10s（可按住连发）、音量 ± / 静音 / 亮度 −/＋ / 截屏 / 多任务 / 返回主页菜单 |
+| 手机当手柄玩模拟器 | 手柄页：浮键 / Xbox 式皮肤 / 自定义三种布局，移动盘（十字键 / 圆盘 / 模拟摇杆）+ ABXY + L1/R1/LT/RT + SELECT/START + 双模拟摇杆，大小可分别无级调节 |
 
 | 键盘 | 触控板 |
 |---|---|
@@ -53,11 +48,14 @@
 - **键盘**：手机布局 / 电脑布局两套，含符号页、Ctrl+C/V/X/A、Alt+Tab、方向键
 - **触控板**：单指移动 · 点击左键 · 双指滚动 · 双指点击右键 · 三指中键；底部左/中/右键可长按拖动；右侧滚动列；一键弹出浮层数字键盘 / 浮层键盘 / 浮层触控板
 - **指针灵敏度**：0.4×–2.5× 无极滑块 + 慢/标准/快预设 + 加速度开关 + 滚轮 1–6 行，四处触控面统一生效
-- **媒体键**：媒体条 + 音量 / 静音 / CC / **亮度 −/＋**、返回 / 主页 / 菜单 / 电源（vivo 系平板走 WiFi 伴侣调亮度）
+- **媒体键**：5 键媒体条（**⏪ 快退 / ⏮ / ⏯ / ⏭ / ⏩ 快进**，长按 ⏪、⏩ 每 100 ms 连发）+ 4 药丸（**亮度 −/＋**、**−10s / ＋10s**，±10s 可切换发「上一段/下一段」或 ←/→）+ 音量 / 静音 / CC、返回 / 主页 / 菜单 / 电源
+- **触控延迟优化**：一帧历史采样全累加、合并窗口 2 ms、极速模式（移动中不重绘不震动）、点击方式「抬手 / 按下即点」、长按拖拽 250/350/450 ms 可调；「更多设置」里可读指针延迟 p50/p95（实测 age p50=8 ms / p95=10 ms，App 侧发送成本 p50=2 ms）
 - **游戏手柄**
   - 三种布局：**浮键**（左下移动盘、右下 X/Y/A/B、两侧肩键、顶部 SELECT/START，中间留空不挡画面）/ **皮肤**（整块 Xbox 式机身 + 白色圆环 + 双摇杆）/ **自定义**（任何按键都能拖，横竖屏各存一套）
-  - 移动盘两种形态：**十字键** / **圆盘**（按住滑动选 8 方向、扇区高亮、松手回中）
-  - 大小：**移动盘** 与 **按键（ABXY / 肩键 / 菜单键）** 各一个 60%–150% 无级滑块，立即生效并记忆
+  - 移动盘三种形态：**十字键** / **圆盘**（按住滑动选 8 方向、扇区高亮、松手回中）/ **摇杆**（真模拟摇杆，摇杆头跟手，输出 X/Y 轴；可开「摇杆同时发方向键」兼容只认方向键的老模拟器）
+  - 大小：**移动盘** 与 **按键（ABXY / 肩键 / 菜单键）** 各一个 **60%–200%** 无级滑块，滑块下方显示「本屏实际 N%」（屏幕放不下时如实钳制），立即生效并记忆
+  - **大键模式**：隐藏肩键 / 摇杆 / 菜单键，只留方向盘与 ABXY —— 横屏左右贴边、竖屏上下竖排，按键可放到接近满屏
+  - 右摇杆轴向可选 **RX/RY** 或 **Z/RZ**（选 Z/RZ 需在平板上忘记设备后重新配对一次）
   - 输入：ABXY + L1/R1/LT/RT + SELECT/START + **L/R 模拟摇杆**（四轴），支持多指同时按
   - 触控板：中间空白可当触控板（关 / 中间面板 / 整片空白），手势与触控板页一致，可选「只移动」不点击；另有可拖动位置的触控板浮层（带 返回/主页/后台），左半屏按键照常可用
   - 排错：设置里有「方向键方向 · 修正一格」开关，旧配对导致方向整体偏一格时可临时纠正；震动反馈可关
@@ -66,30 +64,27 @@
 - **横竖屏自适应**：横屏紧凑工具栏 + 沉浸全屏；顶部「旋转」键强制横/竖屏（长按恢复跟随系统）
 - **自适应界面**：以 393dp 为基准按屏幕宽度与系统字体缩放，顶栏放不下时收进「更多」；帮助 →「界面大小」可选 自动 / 小 / 标准 / 大
 - **比例可调**：键盘页（触控区 / 键盘）、触控板页与媒体页（功能区 / 留空区）都能拖动调节、双击复位并记忆
-- **WiFi 伴侣（可选）**：中文直接写入平板输入框、剪贴板双向同步、**平板亮度调节**、扫码配对、连接日志
 - **稳定连接**：前台服务保活、HID 断连自动重新注册、内置配对引导与排错帮助
 
-## 两种通道，各司其职
+## 一条通道：蓝牙 HID
 
 ```
-                ┌────────────────────────────┐
-                │      平板 / 电脑 / TV       │
-                │      （被控端，零安装）      │
-                └──────────▲────────┬────────┘
-         蓝牙 HID 键鼠/媒体/手柄     │  可选：WiFi 伴侣（中文/剪贴板/亮度）
-                ┌──────────┴────────▼────────┐
-                │        Android 手机         │
-                │          PhoneKB            │
-                └────────────────────────────┘
+        ┌────────────────────────────┐
+        │     平板 / 电脑 / TV        │
+        │    （被控端，零安装、免 root）│
+        └──────────▲─────────────────┘
+             蓝牙 HID 键鼠 / 媒体 / 手柄
+        ┌──────────┴─────────────────┐
+        │        Android 手机         │
+        │          PhoneKB            │
+        └────────────────────────────┘
 ```
 
-| 场景 | 用哪条通道 |
-|---|---|
-| 打字、快捷键、移动/点击光标、媒体键、手柄 | **蓝牙 HID**（被控端零安装） |
-| 输入中文、发长文本到平板、剪贴板互传 | **WiFi 伴侣**（平板装一次伴侣 App） |
-| 调平板屏幕亮度（平板不认蓝牙亮度键时） | **WiFi 伴侣**（平板授予一次「修改系统设置」） |
+手机把自己注册成**标准蓝牙键盘 + 鼠标 + 媒体控制器 + 手柄**，被控端系统直接认成外设，所以：
 
-两条通道可以同时开，互不影响。
+- **不需要** 在被控端装 App、开调试、给权限，也不需要 root
+- **不需要** 连同一个 WiFi，纯蓝牙即可
+- 中文输入用被控端自己的输入法（外接键盘的身份，任何输入法都正常）
 
 ## 截图
 
@@ -105,17 +100,17 @@
 |---|---|---|
 | ![手柄竖屏](docs/screenshots/07j-gamepad-skin-portrait.png) | ![手柄设置](docs/screenshots/07e-gamepad-settings.png) | ![手柄触控板](docs/screenshots/08-gamepad-tp-overlay.png) |
 
-| 单手遥控台 | 单手拇指键盘 | WiFi 伴侣（手机端） |
+| 单手遥控台 | 单手拇指键盘 | 自适应 · 窄屏「更多」 |
 |---|---|---|
-| ![单手遥控台](docs/screenshots/10-onehand-deck.png) | ![拇指键盘](docs/screenshots/11-onehand-thumb-keyboard.png) | ![伴侣](docs/screenshots/17-wifi-companion-phone.png) |
+| ![单手遥控台](docs/screenshots/10-onehand-deck.png) | ![拇指键盘](docs/screenshots/11-onehand-thumb-keyboard.png) | ![更多菜单](docs/screenshots/19-adaptive-overflow-portrait.png) |
 
 | 竖屏键盘 | 指针灵敏度入口 | 指针灵敏度设置 |
 |---|---|---|
 | ![竖屏键盘](docs/screenshots/12-keyboard-portrait-phone.png) | ![灵敏度胶囊](docs/screenshots/22-sensitivity-chip.png) | ![灵敏度弹窗](docs/screenshots/23-sensitivity-dialog.png) |
 
-| 竖屏触控板 | 自适应 · 窄屏「更多」 | 界面大小 |
+| 竖屏触控板 | 界面大小 | 手柄（浮键 · 竖屏） |
 |---|---|---|
-| ![竖屏触控板](docs/screenshots/14-touchpad-portrait.png) | ![更多菜单](docs/screenshots/19-adaptive-overflow-portrait.png) | ![界面大小](docs/screenshots/21-ui-size-dialog.png) |
+| ![竖屏触控板](docs/screenshots/14-touchpad-portrait.png) | ![界面大小](docs/screenshots/21-ui-size-dialog.png) | ![手柄浮键竖屏](docs/screenshots/07b-gamepad-portrait.png) |
 
 更多截图见 [docs/screenshots/](docs/screenshots/)。
 
@@ -125,10 +120,9 @@
 
 | 文件 | 装在哪 | 说明 |
 |---|---|---|
-| `PhoneKB-0.25.0.apk` | **手机** | 主 App，全部键鼠/媒体/手柄功能 |
-| `PhoneKB-Companion-0.4.0.apk` | **平板**（可选） | 伴侣 App，只在需要中文输入/剪贴板/亮度时安装 |
+| `PhoneKB-0.36.1.apk` | **手机** | 全部键鼠 / 媒体 / 手柄功能，一个 APK 就是全部 |
 
-安装提示：Android 13+ 首次安装需允许「此来源的应用」；手机端首次运行请允许通知权限（前台服务保活，否则后台会被系统回收导致蓝牙断开）。
+安装提示：Android 13+ 首次安装需允许「此来源的应用」；首次运行请允许通知权限（前台服务保活，否则后台会被系统回收导致蓝牙断开）。
 
 ## 快速开始
 
@@ -147,19 +141,7 @@ graph LR
 
 **连上了但按键没反应？** 在手机蓝牙设置里删掉该设备的配对，再从 App 的配对引导重新走一次（HID 需要正确的配对流程）。换了新版本如果手柄摇杆 / LT / RT 没反应，同样需要「忘记设备 → 重新配对」一次（HID 报告描述符更新过）。更多排错见 [docs/使用说明.md](docs/使用说明.md)。
 
-## WiFi 伴侣（可选，解决中文输入 / 亮度）
-
-蓝牙 HID 只能发送键盘键码，汉字要靠被控端自己的输入法。想让「手机打中文、平板直接出汉字」请用伴侣：
-
-1. 平板安装并打开 **PhoneKB 伴侣**，页面显示配对二维码
-2. 手机 App → 右上角 **伴侣** → **扫码连接平板**（也可手动填 IP / 端口 / 配对码）
-3. 平板自动连回手机，伴侣页显示「平板已连接」
-4. 在「发送中文到平板」框输入中文 → **发送到平板**，文字会写进平板当前输入框；也可把手机剪贴板一键发过去
-5. 平板上复制的文字会自动同步回手机剪贴板
-
-> 平板端需要开启**无障碍服务**（Android 安全限制，重启/被清理后需手动再开一次）。建议同时开「电池不限制」「允许自启动」。
-
-**用手机调平板亮度**：媒体页的「亮度 −/＋」在多数 Android 平板/电视盒子上有效；iQOO / vivo 等部分平板会完全忽略蓝牙亮度键码。这类平板请在伴侣页点「**授予「修改系统设置」权限**」授权一次，之后手机点亮度键就会走 WiFi 直接改平板系统亮度（会先切到手动亮度，步长约 8%）。
+**应用被系统杀掉后平板不自动重连？** 杀掉 App 等于注销了 HID 外设，平板只会在已配对列表里保留记录、不会自动把「输入设备」连回来。回到 App 后到平板蓝牙里点一下这台手机即可（必要时「取消配对」再重新配对一次）。
 
 ## 手势与快捷键速查
 
@@ -192,7 +174,6 @@ graph LR
 | 手机（控制端） | Android 9（API 28）及以上；系统保留 **Bluetooth HID Device profile**（少数厂商 ROM 会屏蔽，App 会检测并提示） |
 | 被控端 | 支持蓝牙键盘/鼠标的设备：Android 平板/手机、Windows、macOS、Linux；iPadOS 13+ 理论支持（未实测） |
 | 界面适配 | 以 393dp 为基准自动缩放，约 320–480dp 宽度、系统字体 0.85–1.3 倍下均可用 |
-| WiFi 伴侣 | 平板 Android 9+，安装伴侣 APK 并开无障碍；手机与平板在同一 WiFi（手机热点也行） |
 
 ## 为什么不用投屏 / 远程桌面？
 
@@ -206,10 +187,8 @@ PhoneKB 不传输画面，只把手机当外设，所以延迟低、被控端干
 
 ## 隐私与权限
 
-- 手机端权限：**蓝牙**（HID 必需）、**网络**（WiFi 伴侣，仅局域网）、**通知**（前台服务保活）；不需要存储、通讯录、位置
-- 扫码使用系统相机 App，**不申请相机权限**
-- WiFi 伴侣只在同一局域网内直连（默认端口 `47653`），配对使用一次性配对码；数据不经过任何服务器
-- 不采集、不上传任何数据，所有配置只保存在本机 SharedPreferences
+- 手机端权限：只有 **蓝牙**（HID 必需）和 **通知**（前台服务保活）；不需要网络、存储、通讯录、位置、麦克风、相机
+- 没有服务器、没有账号，不采集也不上传任何数据，所有配置只保存在本机 SharedPreferences
 
 ## 构建
 
@@ -219,20 +198,19 @@ PhoneKB 不传输画面，只把手机当外设，所以延迟低、被控端干
 ./gradlew assembleDebug        # Windows: gradlew.bat assembleDebug
 ```
 
-产物：`app/build/outputs/apk/debug/app-debug.apk`（手机端）、`companion/build/outputs/apk/debug/companion-debug.apk`（伴侣）。需要 JDK 17+、Android SDK Platform 36。
+产物：`app/build/outputs/apk/debug/app-debug.apk`。需要 JDK 17+、Android SDK Platform 36。
 
 ### 命令行（不装 Android Studio，Windows）
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools/build.ps1 -Clean -Module app -VersionName 0.25.0 -VersionCode 39
-powershell -ExecutionPolicy Bypass -File tools/build.ps1 -Clean -Module companion -VersionName 0.4.0 -VersionCode 4
+powershell -ExecutionPolicy Bypass -File tools/build.ps1 -Clean -VersionName 0.36.1 -VersionCode 58
 ```
 
-脚本直接调用 `aapt2 → javac → d8 → zipalign → apksigner`，产物在 `build/`。平板没有 adb 时，可用 `node tools/serve-apk.js` 起一个局域网下载页（端口 8000）。
+脚本直接调用 `aapt2 → javac → d8 → zipalign → apksigner`，产物在 `build/`。设备没有 adb 时，可用 `node tools/serve-apk.js` 起一个局域网下载页（端口 8000）。
 
 ### GitHub Actions
 
-仓库自带 CI（[build.yml](.github/workflows/build.yml)），push / PR 自动构建两个 debug APK 并上传 Artifacts。发布流程见 [docs/发布指南.md](docs/发布指南.md)。
+仓库自带 CI（[build.yml](.github/workflows/build.yml)），push / PR 自动构建 debug APK 并上传 Artifacts。发布流程见 [docs/发布指南.md](docs/发布指南.md)。
 
 ## 项目结构
 
@@ -251,16 +229,10 @@ app/src/main/java/com/phonekb/          手机端
   OneHandDeckView.java   单手模式
   PointerSettings.java   指针灵敏度 / 滚轮 / 加速度设置
   SensitivityDialog.java 指针灵敏度弹窗
-  CompanionActivity.java WiFi 伴侣页（扫码 / 中文上屏 / 剪贴板 / 日志）
-  CompanionBridge.java   WiFi 通道服务端（TCP，一行一个 JSON）
   KeepAliveService.java  前台保活服务
   ChromeBar.java / Ui.java / Icons.java  顶栏折叠、自适应尺寸、自绘图标
-companion/src/main/java/com/phonekb/companion/   平板伴侣
-  MainActivity.java      配对二维码 / 连接状态 / 收发日志
-  LinkService.java       通道客户端 + 配对监听 + 保活
-  InjectorService.java   无障碍服务：文字写入当前输入框
 tools/build.ps1          无 IDE 构建脚本
-tools/serve-apk.js       局域网 APK 下载页（平板装伴侣用）
+tools/serve-apk.js       局域网 APK 下载页
 docs/                    文档与截图
 ```
 
@@ -271,33 +243,31 @@ docs/                    文档与截图
   - 鼠标：按键 + 相对位移 + 滚轮
   - Consumer Control：16 位 usage（媒体、音量、亮度、浏览器/主页/返回等）
   - Gamepad：hat + 16 个按键 + 4 个轴（X / Y / Rx / Ry，-127..127，摇杆用）
-- 全部 UI 为自绘 `View`（Canvas），蓝牙功能**无第三方依赖**；自适应缩放、顶栏折叠也由自绘逻辑完成
+- 全部 UI 为自绘 `View`（Canvas），蓝牙功能**无第三方依赖**（连 jar 都没有）；自适应缩放、顶栏折叠也由自绘逻辑完成
 - 手势统一走 `PadController`；指针位移 = 手指数 × 1.7（基准）× 灵敏度，开启加速度时快扫最多再 ×1.9
 - 手柄低延迟：HID 报告在专用线程发送、鼠标/摇杆移动 4ms 合并上报（≈250Hz）
 - 前台服务保活，避免 Activity 被回收导致 HID 静默注销；注册失败自动重试
-- WiFi 伴侣：手机端 TCP 服务端（默认端口 **47653**），平板端客户端，协议为「一行一个 JSON」；配对时平板监听 **47654** 并展示二维码，手机扫码后把 `{ip,port,token}` 交给平板，平板再主动连回手机
-- 平板端用 `AccessibilityService` 把文字写入焦点输入框并同步剪贴板；亮度通过 `Settings.System` + WRITE_SETTINGS 权限修改
 
 ## 已知限制
 
-- **中文输入**：蓝牙 HID 只发键码，汉字需要被控端自己的输入法；手机打中文请用 WiFi 伴侣
-- **WiFi 伴侣依赖无障碍**：Android 不允许 App 自动开启无障碍，平板重启/被清理后需手动再开一次
-- **伴侣只解决文字/剪贴板/亮度**：键鼠操作仍走蓝牙 HID
+- **中文输入**：蓝牙 HID 只发键码，汉字由被控端自己的输入法完成（手机端不做语音/上传，这也是 v0.36.0 移除 WiFi 伴侣后的取舍）
 - **光标外观**：光标由被控端系统绘制，蓝牙鼠标只能发相对位移，无法改形状/大小；可在平板「辅助功能 / 鼠标」里调指针大小
+- **亮度键**：多数 Android 平板/电视盒子响应 Consumer 亮度 usage，iQOO / vivo 等部分平板会完全忽略（属于被控端行为，App 无法绕过）
+- **截屏 / 多任务**：走 PrintScreen / Alt+Tab，最终由系统决定，个别 App 可能拦截
 - 少数手机 ROM 禁用 HID Device profile，只能当主机用
 - 同一时间只能有一个 App 注册 HID 外设，装了其它 HID 类 App 需先停用
 - 旧配对缓存会保留旧的 HID 描述符：新增摇杆 / LT / RT 后需「忘记设备 → 重新配对」一次
 
 ## 常见问题
 
-**Q：手机和平板需要连同一个 WiFi 吗？**
-A：只有用 WiFi 伴侣时需要；纯蓝牙 HID 不需要。
-
 **Q：平板需要 root 吗？手机需要 root 吗？**
 A：都不需要。被控端甚至不需要装 App。
 
 **Q：为什么平板打不出中文？**
-A：蓝牙 HID 只能发送键码（相当于外接键盘），系统输入法不会把拼音转成汉字。用 WiFi 伴侣可把手机输入的中文直接写进平板输入框。
+A：蓝牙键盘只能发送键码（和外接键盘一样），平板不会把手机上的拼音变成汉字。改用平板自己的输入法即可：拼音、语音、手写都能用，键盘照常打字。
+
+**Q：手机和平板需要连同一个 WiFi 吗？**
+A：不需要。PhoneKB 只走蓝牙 HID。
 
 **Q：手柄摇杆 / LT / RT 没反应？**
 A：这几项是后加的，HID 描述符变了，需要在平板蓝牙设置里「忘记设备」，再从 App 重新配对一次。
@@ -319,9 +289,11 @@ A：那是「投屏 + 注入」，需要被控端开调试；PhoneKB 追求被�
 
 ## Roadmap
 
-- [ ] WiFi 伴侣：语音输入上屏、自定义光标浮窗（大小/颜色）、WiFi 与蓝牙自动切换
+- [x] 媒体页重做（截屏 / 多任务 / ±10s 长按连发）
+- [x] 手柄三布局 + 十字键 / 圆盘 / 模拟摇杆
 - [ ] HID 绝对触控（数字化仪）模式：触控板 1:1 映射平板屏幕，点哪打哪
 - [ ] USB 通道（ADB 注入）
+- [ ] Apple 设备实测（iPadOS）与兼容性说明
 
 ## 参与贡献
 

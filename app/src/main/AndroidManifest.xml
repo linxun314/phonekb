@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    android:versionCode="39"
-    android:versionName="0.25.0">
+    android:versionCode="58"
+    android:versionName="0.36.1">
 
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
@@ -9,15 +9,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-feature android:name="android.hardware.bluetooth" android:required="true" />
 
     <application
         android:allowBackup="true"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:label="PhoneKB"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
@@ -33,27 +31,9 @@
             </intent-filter>
         </activity>
 
-        <activity
-            android:name=".CompanionActivity"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|fontScale|uiMode|density|navigation|layoutDirection|locale"
-            android:exported="false"
-            android:label="伴侣模式"
-            android:windowSoftInputMode="adjustResize" />
-
         <service
             android:name=".KeepAliveService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
-
-        <!-- Test hook: lets adb broadcast-driven integration tests send text/clipboard
-             to the paired tablet while the tablet UI stays in the foreground.
-             Guarded by the pairing token inside the receiver. -->
-        <receiver
-            android:name=".DebugSendReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.phonekb.action.DEBUG_SEND" />
-            </intent-filter>
-        </receiver>
     </application>
 </manifest>

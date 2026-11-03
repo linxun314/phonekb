@@ -12,6 +12,7 @@ import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
+import android.os.SystemClock;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
@@ -39,13 +40,20 @@ import java.util.Map;
 public final class GamepadView extends View {
     public static final int PAD_BUTTONS = 0;
     public static final int PAD_DISC = 1;
+    /** Analog thumb stick on the left zone: drag the knob, it emits X/Y axes (and optionally hat). */
+    public static final int PAD_STICK = 2;
 
     private static final int KIND_DPAD = 0;
     private static final int KIND_FACE = 1;
     private static final int KIND_PILL = 2;
 
     private static final float SCALE_MIN = 0.60f;
-    private static final float SCALE_MAX = 1.50f;
+    /** Key geometry as a fraction of the d-pad ring radius (shared by layout and hit-testing). */
+    private static final float DPAD_KEY_RATIO = 0.74f;
+    private static final float DPAD_ARM_RATIO = 0.60f;
+    private static final float FACE_R_RATIO = 0.42f;
+    private static final float FACE_OFF_RATIO = 0.62f;
+    private static final float SCALE_MAX = 2.00f;
     private static final float SCALE_DEFAULT = 1.00f;
     private static final int SCALE_STEPS = 90;
 
@@ -64,6 +72,13 @@ public final class GamepadView extends View {
     private static final long TAP_MAX_MS = 220;
 
     private static final int HAT_NEUTRAL = 0x0F;
+    /**
+     * A tap shorter than this can slip between two host polls, so the host only ever sees the
+     * key as already released. The button bit is held slightly longer instead of dropping the tap.
+     */
+    private static final long MIN_HOLD_MS = 34L;
+    private long lastStickSendAt;
+    private boolean stickSendScheduled;
     private static final String[] DIR_NAMES = {"上", "右上", "右", "右下", "下", "左下", "左", "左上"};
 
     private static final class Btn {
@@ -75,6 +90,8 @@ public final class GamepadView extends View {
         int fill;
         boolean pressed;
         float radius;
+        long downAt;
+        boolean releasePending;
 
         Btn(int bit, int kind, String label, int fill, int labelColor) {
             this.bit = bit;
@@ -120,10 +137,22 @@ public final class GamepadView extends View {
     private int padType;
     private float padScale;
     private float btnScale;
+    /** Percentages that actually fit this screen after clamping (shown in the settings dialog). */
+    private int realPadPercent = 100;
+    private int realBtnPercent = 100;
+    /** Right stick axis: 0 = Rx / Ry (standard), 1 = Z / Rz (older hosts / some games). */
+    private int stickAxisMode;
     private boolean hatCompat;
     private int touchMode;
     private boolean touchMoveOnly;
     private boolean haptics;
+    /** 「极速模式」: no haptics, no cosmetic redraws for stick movement, lower stick report rate. */
+    private boolean fastMode;
+    /** Big-key mode: hides shoulders, menu keys and sticks so the two thumb clusters can fill the page. */
+    private boolean bigKeys;
+    /** Cached static skin layer (body, rings, stick sockets) so a frame is mostly one blit. */
+    private android.graphics.Bitmap skinCache;
+    private boolean skinCacheDirty = true;
     private final android.os.Vibrator vibrator;
     private final RectF touchRect = new RectF();
     private final RectF touchChipRect = new RectF();
@@ -152,6 +181,7 @@ public final class GamepadView extends View {
     private final RectF[] tpNavRects = {new RectF(), new RectF(), new RectF()};
     private final RectF tpScrollRect = new RectF();
     private final RectF scratch = new RectF();
+    private int tpScrollPressed;
     private boolean holdPressed;
     private boolean holdDragging;
     private float holdDownX;
@@ -162,6 +192,15 @@ public final class GamepadView extends View {
         holdDragging = true;
         buzz(14);
         invalidate();
+    };
+    // Scroll keys repeat like the keyboard-page trackpad: one step on press, then every 110 ms.
+    private final Runnable tpScrollRepeat = new Runnable() {
+        @Override
+        public void run() {
+            if (!tpOpen || tpScrollPressed == 0 || hid == null) return;
+            hid.mouseWheel(tpScrollPressed);
+            postDelayed(this, 110);
+        }
     };
 
     // touch-pad gesture state (mirrors TouchpadView so both feel identical)
@@ -183,6 +222,10 @@ public final class GamepadView extends View {
     private long tpDownTime;
     private int discHat = HAT_NEUTRAL;
     private int discPointer = -1;
+    // v0.31: the movement pad can also be a real analog stick (X/Y axes, knob follows the thumb).
+    private int padStickPointer = -1;
+    private int padStickHat = HAT_NEUTRAL;
+    private boolean padStickHatCompat;
     private boolean landscapeLayout;
     private float padCx;
     private float padCy;
@@ -197,6 +240,10 @@ public final class GamepadView extends View {
     private final RectF bodyRect = new RectF();
     private final RectF stickLRect = new RectF();
     private final RectF stickRRect = new RectF();
+    /** Bigger invisible grab areas so a thumb that lands slightly off still grabs the stick. */
+    private final RectF stickLZone = new RectF();
+    private final RectF stickRZone = new RectF();
+    private boolean debugLog;
     private final RectF editBarLeft = new RectF();
     private final RectF editBarRight = new RectF();
     private final RectF editScratch = new RectF();
@@ -228,11 +275,16 @@ public final class GamepadView extends View {
         padScale = clampScale(prefs.getFloat("gp_pad_scale", SCALE_DEFAULT));
         btnScale = clampScale(prefs.getFloat("gp_btn_scale", SCALE_DEFAULT));
         hatCompat = prefs.getBoolean("gp_hat_compat", false);
+        padStickHatCompat = prefs.getBoolean("gp_stick_hat", false);
         if (hid != null) hid.setHatCompat(hatCompat);
         touchMode = clampTouchMode(prefs.getInt("gp_touch_mode", TOUCH_PANEL));
         touchMoveOnly = prefs.getBoolean("gp_touch_move_only", false);
         tpOffsetDp = prefs.getFloat("gp_tp_offset", 0f);
         haptics = prefs.getBoolean("gp_haptics", true);
+        fastMode = prefs.getBoolean("gp_fast", false);
+        bigKeys = prefs.getBoolean("gp_big", false);
+        stickAxisMode = prefs.getInt("gp_rstick_axis", 0) == 1 ? 1 : 0;
+        if (hid != null) hid.setStickAxisRz(stickAxisMode == 1);
         layoutMode = prefs.getInt("gp_layout", LAYOUT_FLOAT) == LAYOUT_SKIN ? LAYOUT_SKIN : LAYOUT_FLOAT;
         vibrator = (android.os.Vibrator) c.getSystemService(Context.VIBRATOR_SERVICE);
         labelPaint = Ui.text(c, 20, Ui.TEXT);
@@ -277,18 +329,33 @@ public final class GamepadView extends View {
         }
     }
 
-    /** Short vibration; does not depend on the system "touch vibration" switch like performHapticFeedback. */
+    /** Haptics run on their own thread: the Vibrator call is IPC and used to block the UI thread. */
+    private final java.util.concurrent.ExecutorService buzzExecutor =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "phonekb-buzz");
+                t.setDaemon(true);
+                return t;
+            });
+
+    /**
+     * Short vibration; does not depend on the system "touch vibration" switch like
+     * performHapticFeedback. Posted to a worker thread so the touch handler never waits for it.
+     */
     private void buzz(int ms) {
-        if (!haptics || vibrator == null || !vibrator.hasVibrator()) return;
-        try {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                vibrator.vibrate(android.os.VibrationEffect.createOneShot(
-                        ms, android.os.VibrationEffect.DEFAULT_AMPLITUDE));
-            } else {
-                vibrator.vibrate(ms);
+        if (fastMode || !haptics || vibrator == null) return;
+        final android.os.Vibrator v = vibrator;
+        buzzExecutor.execute(() -> {
+            try {
+                if (!v.hasVibrator()) return;
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    v.vibrate(android.os.VibrationEffect.createOneShot(
+                            ms, android.os.VibrationEffect.DEFAULT_AMPLITUDE));
+                } else {
+                    v.vibrate(ms);
+                }
+            } catch (Exception ignored) {
             }
-        } catch (Exception ignored) {
-        }
+        });
     }
 
     private static int clampTouchMode(int mode) {
@@ -325,11 +392,28 @@ public final class GamepadView extends View {
     }
 
     public void setPadType(int type) {
-        int next = type == PAD_DISC ? PAD_DISC : PAD_BUTTONS;
+        int next = type == PAD_DISC ? PAD_DISC : (type == PAD_STICK ? PAD_STICK : PAD_BUTTONS);
         if (next == padType) return;
         resetInput();
         padType = next;
+        padStickPointer = -1;
+        padStickHat = HAT_NEUTRAL;
         prefs.edit().putInt("gp_pad_type", padType).apply();
+        invalidate();
+    }
+
+    /** 「摇杆同时发方向键」: the analog pad also emits a hat so d-pad-only hosts react. */
+    public boolean isPadStickHatCompat() {
+        return padStickHatCompat;
+    }
+
+    public void setPadStickHatCompat(boolean enabled) {
+        padStickHatCompat = enabled;
+        prefs.edit().putBoolean("gp_stick_hat", enabled).apply();
+        if (!enabled && padStickHat != HAT_NEUTRAL) {
+            padStickHat = HAT_NEUTRAL;
+            send();
+        }
         invalidate();
     }
 
@@ -346,6 +430,7 @@ public final class GamepadView extends View {
         prefs.edit().putInt("gp_layout", layoutMode).apply();
         setTouchpadOpen(false);
         if (editing) setEditing(false);
+        skinCacheDirty = true;
         layout();
         invalidate();
     }
@@ -390,10 +475,36 @@ public final class GamepadView extends View {
         if (Math.abs(next - padScale) < 0.0005f) return;
         padScale = next;
         prefs.edit().putFloat("gp_pad_scale", padScale).apply();
+        skinCacheDirty = true;
         invalidate();
     }
 
-    /** Size factor of the action keys: ABXY, L1/R1 and SELECT/START (0.6 - 1.5). */
+    /** Percentage of the movement pad that actually fits the current screen. */
+    public int getRealPadPercent() {
+        return realPadPercent;
+    }
+
+    /** Percentage of the action keys that actually fits the current screen. */
+    public int getRealBtnPercent() {
+        return realBtnPercent;
+    }
+
+    /** 0 = right stick on Rx/Ry (standard), 1 = on Z/Rz (older hosts, some games). */
+    public int getStickAxisMode() {
+        return stickAxisMode;
+    }
+
+    /** Switching this swaps the HID report descriptor, so the host has to pair again. */
+    public void setStickAxisMode(int mode) {
+        int next = mode == 1 ? 1 : 0;
+        if (next == stickAxisMode) return;
+        stickAxisMode = next;
+        prefs.edit().putInt("gp_rstick_axis", next).apply();
+        if (hid != null) hid.setStickAxisRz(next == 1);
+        invalidate();
+    }
+
+    /** Size factor of the action keys: ABXY, L1/R1, LB/LT, SELECT/START (0.6 - 2.0). */
     public float getBtnScale() {
         return btnScale;
     }
@@ -403,6 +514,7 @@ public final class GamepadView extends View {
         if (Math.abs(next - btnScale) < 0.0005f) return;
         btnScale = next;
         prefs.edit().putFloat("gp_btn_scale", btnScale).apply();
+        skinCacheDirty = true;
         invalidate();
     }
 
@@ -427,6 +539,8 @@ public final class GamepadView extends View {
         }
         stickLPointer = -1;
         stickRPointer = -1;
+        padStickPointer = -1;
+        padStickHat = HAT_NEUTRAL;
         lx = 0;
         ly = 0;
         rx = 0;
@@ -459,12 +573,19 @@ public final class GamepadView extends View {
         float rBaseDp = landscapeLayout ? Math.min(wDp * 0.0335f, 31f)
                 : Math.min(wDp * 0.069f, 30f);
         rBaseDp = Math.max(15f, rBaseDp);
+        // Upper bounds for the 200% slider: clamp to what the page can actually hold, otherwise the
+        // two thumb clusters would grow straight into each other.
+        float maxPadDp = landscapeLayout ? Math.min(wDp * 0.105f, 72f) : Math.min(wDp * 0.18f, 86f);
+        float maxFaceDp = landscapeLayout ? Math.min(wDp * 0.052f, 40f) : Math.min(wDp * 0.092f, 44f);
+        padBaseDp = Math.min(padBaseDp, maxPadDp);
+        rBaseDp = Math.min(rBaseDp, maxFaceDp);
 
         // Both thumb clusters grow from the bottom corners, so a large size would push them into
         // each other. Scale both down proportionally in that case instead of overlapping keys.
         float ps = padScale;
         float bs = btnScale;
-        float limitDp = wDp / 2f - e;
+        // Full page width (minus the page margins) is available now: the 200% slider needs the room.
+        float limitDp = wDp - e * 2f;
         float spanDp = padBaseDp * 1.43f * ps + rBaseDp * 2.48f * bs;
         if (spanDp > limitDp && spanDp > 0f) {
             float f = limitDp / spanDp;
@@ -508,9 +629,19 @@ public final class GamepadView extends View {
         a.radius = r;
         b.radius = r;
 
-        // --- shoulder keys: mid sides in portrait (thumb reach), top row in landscape
-        float sw = dp(96) * bs;
-        float sh = dp(38) * bs;
+        // --- shoulder keys: mid sides in portrait (thumb reach), top row in landscape.
+        // L1/LT sit as a pair on the left, RT/R1 as a pair on the right, so the floating layout
+        // offers the same four shoulders as the skin layout (it used to have L1/R1 only).
+        float sh = Math.min(dp(38) * bs, h * 0.11f);
+        float gapS = dp(6);
+        float sw;
+        if (landscapeLayout) {
+            sw = Math.min(dp(96) * bs, wDp * 0.22f * unit);
+        } else {
+            // Four pills have to share one row: 2*e margins + 3 gaps, split in four.
+            float fit = (wDp - e * 2f - 18f) / 4f * unit;
+            sw = Math.min(dp(84) * bs, Math.max(dp(48), fit));
+        }
         float shoulderTop;
         if (landscapeLayout) {
             shoulderTop = dp(e);
@@ -520,7 +651,9 @@ public final class GamepadView extends View {
             shoulderTop = Math.max(dp(48), clusterTop - dp(38) - sh);
         }
         l1.rect.set(dp(e), shoulderTop, dp(e) + sw, shoulderTop + sh);
+        l2.rect.set(l1.rect.right + gapS, shoulderTop, l1.rect.right + gapS + sw, shoulderTop + sh);
         r1.rect.set(w - dp(e) - sw, shoulderTop, w - dp(e), shoulderTop + sh);
+        r2.rect.set(r1.rect.left - gapS - sw, shoulderTop, r1.rect.left - gapS, shoulderTop + sh);
 
         // In landscape the shoulder row sits at the very top, so the settings chip moves to the
         // bottom centre (free space between the two thumb clusters) instead of hiding behind L1.
@@ -674,25 +807,100 @@ public final class GamepadView extends View {
                 chipRect.right + dp(8) + dp(84), chipRect.bottom);
         tpChipRect.set(w - dp(16) - dp(82), dp(10), w - dp(16), dp(10) + dp(27));
 
-        // Rings, sticks, shoulders and menu keys each own a band of the body so nothing overlaps.
-        float ringR = land ? bh * 0.26f : Math.min(bw * 0.145f, bh * 0.10f);
-        ringR = Math.max(dp(30), ringR * padScale);
-        padCx = bodyRect.left + bw * (land ? 0.215f : 0.28f);
-        padCy = bodyRect.top + bh * (land ? 0.44f : 0.17f);
-        padHalf = ringR;
-        discRect.set(padCx - ringR, padCy - ringR, padCx + ringR, padCy + ringR);
+        // Ergonomics-first layout (see docs/设计原则.md):
+        //  - landscape (the way this page is used): shoulders on the top edge where the index
+        //    fingers rest, d-pad and ABXY in one horizontal band, each stick on the inner side of
+        //    its own cluster, menu keys top-centre. Nothing stacks vertically any more, so a 200%
+        //    cluster really is twice the size of a 100% one instead of being capped by the height.
+        //  - portrait: clusters side by side on top, each stick straight below its cluster,
+        //    shoulders in the mid band, menu keys bottom-centre. Width is the limit here, so the
+        //    settings dialog reports the percentage that actually fits.
+        float ringPad = dp(8);
 
-        float s = ringR * 0.62f;
-        float arm = ringR * 0.60f;
+        // Shoulder and menu keys scale with the button slider as well (they used to be fixed);
+        // big-key mode hides them completely so the clusters can use the whole page.
+        float sw = bigKeys ? 0f : Math.min(dp(84) * btnScale, dp(140));
+        float sh = bigKeys ? 0f : Math.min(dp(30) * btnScale, dp(46));
+        float mw = bigKeys ? 0f : Math.min(dp(64) * btnScale, dp(106));
+        float mh = bigKeys ? 0f : Math.min(dp(30) * btnScale, dp(44));
+        // Sticks keep a fixed, thumb-sized radius: growing them with the slider made the reach
+        // worse, and the pads themselves are what the slider is for.
+        float sr = bigKeys ? 0f : dp(land ? 44 : 40);
+
+        float padBase = land ? Math.min(bh * 0.19f, bw * 0.10f) : Math.min(bw * 0.145f, bh * 0.10f);
+        float faceBase = padBase * (FACE_OFF_RATIO + FACE_R_RATIO);
+
+        // The clusters hang from just below the shoulder band and grow downwards, so a large size
+        // can never slide under the shoulder keys. maxR is the biggest pad that still fits; the
+        // sliders are clamped to it and the dialog reports the real percentage.
+        float clusterTop = land ? bodyRect.top + dp(10) + sh + dp(14) : bodyRect.top + dp(18);
+        float availV = bodyRect.bottom - dp(12) - clusterTop;
+        if (bigKeys) {
+            // Nothing else on the page: use the full height and centre the two clusters.
+            availV = bodyRect.height() - dp(24);
+        }
+        // Big-key mode in portrait stacks the two clusters (d-pad on top, ABXY below) instead of
+        // putting them side by side, which is the only way to make them really large on a phone.
+        boolean stacked = bigKeys && !land;
+        float maxR = stacked ? (bodyRect.height() - dp(40)) / 4f : availV / 2f;
+        float widthLimit;
+        if (bigKeys) {
+            widthLimit = bw / 2f - dp(20);
+        } else if (land) {
+            // Clusters on the left/right edges with their sticks between them.
+            widthLimit = bw / 2f - dp(26) - ringPad - sr - dp(14);
+        } else {
+            // Portrait: two clusters side by side, so both diameters must fit next to each other.
+            widthLimit = (bw - ringPad * 4f - dp(16)) / 4f;
+        }
+        maxR = Math.min(maxR, widthLimit);
+        maxR = Math.max(dp(30), maxR);
+        if (stacked) {
+            padCx = bodyRect.centerX();
+            faceCx = padCx;
+            padCy = bodyRect.centerY() - dp(10) - maxR;
+            faceCy = bodyRect.centerY() + dp(10) + maxR;
+        } else if (bigKeys) {
+            clusterTop = bodyRect.centerY() - maxR;
+        }
+
+        float padR = Math.min(padBase * padScale, maxR);
+        float faceSpan = Math.min(faceBase * btnScale, maxR);
+        faceSpan = Math.max(dp(22), faceSpan);
+        padR = Math.max(dp(26), padR);
+        // Percentages that actually fit this screen; the dialog shows them next to the sliders.
+        realPadPercent = Math.round(Math.min(padScale, maxR / Math.max(1f, padBase)) * 100f);
+        realBtnPercent = Math.round(Math.min(btnScale, maxR / Math.max(1f, faceBase)) * 100f);
+
+        if (!stacked) {
+            padCy = clusterTop + padR;
+            faceCy = padCy;
+        }
+        if (stacked) {
+            // centres were fixed above; keep the size that fitted vertically
+        } else if (land) {
+            padCx = bodyRect.left + dp(18) + padR;
+            faceCx = bodyRect.right - dp(18) - faceSpan;
+        } else {
+            float pairMargin = Math.max(dp(8),
+                    (bw - (padR + faceSpan) * 2f - ringPad * 4f) / 2f);
+            padCx = bodyRect.left + pairMargin + padR + ringPad;
+            faceCx = bodyRect.right - pairMargin - faceSpan - ringPad;
+        }
+        padHalf = padR;
+        discRect.set(padCx - padR, padCy - padR, padCx + padR, padCy + padR);
+
+        float s = padR * DPAD_KEY_RATIO;
+        float arm = padR * DPAD_ARM_RATIO;
         up.rect.set(padCx - s / 2f, padCy - arm - s / 2f, padCx + s / 2f, padCy - arm + s / 2f);
         down.rect.set(padCx - s / 2f, padCy + arm - s / 2f, padCx + s / 2f, padCy + arm + s / 2f);
         left.rect.set(padCx - arm - s / 2f, padCy - s / 2f, padCx - arm + s / 2f, padCy + s / 2f);
         right.rect.set(padCx + arm - s / 2f, padCy - s / 2f, padCx + arm + s / 2f, padCy + s / 2f);
 
-        float fr = ringR * 0.30f * btnScale;
-        float off = ringR * 0.52f;
-        faceCx = bodyRect.right - bw * (land ? 0.215f : 0.28f);
-        faceCy = padCy;
+        // ABXY keeps the classic diamond shape: key radius and spacing scale together, so the four
+        // buttons stay apart instead of swallowing each other at large sizes.
+        float off = faceSpan / (1f + FACE_R_RATIO / FACE_OFF_RATIO);
+        float fr = off * (FACE_R_RATIO / FACE_OFF_RATIO);
         y.rect.set(faceCx - fr, faceCy - off - fr, faceCx + fr, faceCy - off + fr);
         x.rect.set(faceCx - off - fr, faceCy - fr, faceCx - off + fr, faceCy + fr);
         b.rect.set(faceCx + off - fr, faceCy - fr, faceCx + off + fr, faceCy + fr);
@@ -701,34 +909,129 @@ public final class GamepadView extends View {
         x.radius = fr;
         a.radius = fr;
         b.radius = fr;
-        faceRingR = off + fr + dp(10);
+        faceRingR = faceSpan + ringPad;
 
-        float sw = bw * (land ? 0.105f : 0.34f) * btnScale;
-        float sh = bh * (land ? 0.15f : 0.052f) * btnScale;
-        float lbX = bodyRect.left + bw * (land ? 0.04f : 0.06f);
-        float tlY = bodyRect.top + bh * (land ? 0.03f : 0.40f);
-        float blY = bodyRect.top + bh * (land ? 0.80f : 0.472f);
-        l1.rect.set(lbX, tlY, lbX + sw, tlY + sh);
-        l2.rect.set(lbX, blY, lbX + sw, blY + sh);
-        float rbX = bodyRect.right - bw * (land ? 0.04f : 0.06f) - sw;
-        r1.rect.set(rbX, tlY, rbX + sw, tlY + sh);
-        r2.rect.set(rbX, blY, rbX + sw, blY + sh);
+        // Sticks: landscape keeps them in the cluster band (inner side of each cluster), portrait
+        // puts them straight below their own cluster so the thumb only travels down.
+        float sxL = 0f;
+        float sxR = 0f;
+        float sy = 0f;
+        // The left socket is redundant when the movement pad itself is an analog stick.
+        boolean hideLeftStick = bigKeys || padType == PAD_STICK;
+        if (bigKeys) {
+            stickLRect.setEmpty();
+            stickRRect.setEmpty();
+            stickLZone.setEmpty();
+            stickRZone.setEmpty();
+        } else {
+            if (land) {
+                sy = padCy;
+                sxL = padCx + padR + dp(14) + sr;
+                sxR = faceCx - faceSpan - dp(14) - sr;
+            } else {
+                sy = padCy + padR + dp(18) + sr;
+                sxL = padCx;
+                sxR = faceCx;
+            }
+            stickRRect.set(sxR - sr, sy - sr, sxR + sr, sy + sr);
+            // Grab area is deliberately much larger than the drawn socket - the old 1.55x radius
+            // meant a thumb that landed 1 cm off started dragging the touch pad instead, which read
+            // as "the right stick does not work".
+            float grab = sr * 1.45f;
+            stickRZone.set(sxR - grab, sy - grab, sxR + grab, sy + grab);
+            if (hideLeftStick) {
+                stickLRect.setEmpty();
+                stickLZone.setEmpty();
+            } else {
+                stickLRect.set(sxL - sr, sy - sr, sxL + sr, sy + sr);
+                stickLZone.set(sxL - grab, sy - grab, sxL + grab, sy + grab);
+            }
+        }
 
-        float mh = (land ? dp(30) : dp(24)) * btnScale;
-        float mw = (land ? dp(78) : dp(60)) * btnScale;
-        float menuCy = bodyRect.top + bh * (land ? 0.19f : 0.30f);
-        float menuCx = bodyRect.centerX();
-        select.rect.set(menuCx - dp(6) - mw, menuCy - mh / 2f, menuCx - dp(6), menuCy + mh / 2f);
-        start.rect.set(menuCx + dp(6), menuCy - mh / 2f, menuCx + dp(6) + mw, menuCy + mh / 2f);
+        if (bigKeys) {
+            l1.rect.setEmpty();
+            l2.rect.setEmpty();
+            r1.rect.setEmpty();
+            r2.rect.setEmpty();
+        } else if (land) {
+            float gap = dp(8);
+            float ly = bodyRect.top + dp(10);
+            l1.rect.set(bodyRect.left + dp(10), ly, bodyRect.left + dp(10) + sw, ly + sh);
+            l2.rect.set(l1.rect.right + gap, ly, l1.rect.right + gap + sw, ly + sh);
+            float rx = bodyRect.right - dp(10) - sw;
+            r1.rect.set(rx, ly, rx + sw, ly + sh);
+            r2.rect.set(rx - gap - sw, ly, rx - gap, ly + sh);
+        } else {
+            // +30dp: the stick grab area reaches 1.45x the painted radius, so the shoulder row has
+            // to start below it - at 22dp the top third of L1/R1 was being eaten by the stick.
+            float ly = Math.max(stickLRect.bottom, stickRRect.bottom) + dp(30);
+            l1.rect.set(bodyRect.left + dp(12), ly, bodyRect.left + dp(12) + sw, ly + sh);
+            l2.rect.set(l1.rect.left, l1.rect.bottom + dp(6), l1.rect.left + sw, l1.rect.bottom + dp(6) + sh);
+            float rx = bodyRect.right - dp(12) - sw;
+            r1.rect.set(rx, ly, rx + sw, ly + sh);
+            r2.rect.set(rx, r1.rect.bottom + dp(6), rx + sw, r1.rect.bottom + dp(6) + sh);
+        }
 
-        float sr = (land ? bh * 0.11f : Math.min(bw * 0.115f, bh * 0.07f)) * btnScale;
-        float sy = bodyRect.top + bh * (land ? 0.73f : 0.60f);
-        float sxL = land ? bodyRect.centerX() - bw * 0.11f
-                : bodyRect.left + bw * 0.28f;
-        float sxR = land ? bodyRect.centerX() + bw * 0.11f
-                : bodyRect.right - bw * 0.28f;
-        stickLRect.set(sxL - sr, sy - sr, sxL + sr, sy + sr);
-        stickRRect.set(sxR - sr, sy - sr, sxR + sr, sy + sr);
+        // Menu keys: top centre in landscape (between the shoulder pairs), bottom centre in portrait.
+        if (bigKeys) {
+            l1.rect.setEmpty();
+            l2.rect.setEmpty();
+            r1.rect.setEmpty();
+            r2.rect.setEmpty();
+            select.rect.setEmpty();
+            start.rect.setEmpty();
+        } else {
+            float menuCx = bodyRect.centerX();
+            float menuCy = land ? bodyRect.top + dp(10) + mh / 2f
+                    : bodyRect.bottom - dp(14) - mh / 2f;
+            select.rect.set(menuCx - dp(6) - mw, menuCy - mh / 2f, menuCx - dp(6), menuCy + mh / 2f);
+            start.rect.set(menuCx + dp(6), menuCy - mh / 2f, menuCx + dp(6) + mw, menuCy + mh / 2f);
+        }
+        if (debugLog) {
+            android.util.Log.d("PhoneKB-GP", "skin land=" + land + " w=" + w + " h=" + h
+                    + " body=" + bodyRect + " ring=" + padR + " pad=(" + padCx + "," + padCy + ")"
+                    + " l1=" + l1.rect + " l2=" + l2.rect + " r2=" + r2.rect
+                    + " stickL=" + stickLRect + " stickR=" + stickRRect
+                    + " ring=" + padR + " face=" + faceSpan + " padR%=" + realPadPercent
+                    + " btn%=" + realBtnPercent);
+        }
+    }
+
+    /** Debug switch for {@code --ei gplog 1}. */
+    public void setDebugLog(boolean on) {
+        debugLog = on;
+    }
+
+    /** 「极速模式」 state (no haptics, fewer cosmetic redraws). */
+    public boolean isFastMode() {
+        return fastMode;
+    }
+
+    public void setFastMode(boolean on) {
+        fastMode = on;
+        prefs.edit().putBoolean("gp_fast", on).apply();
+        skinCacheDirty = true;
+        invalidate();
+    }
+
+    /** Big-key mode: the clusters take the whole page (no shoulders / menu keys / sticks). */
+    public boolean isBigKeys() {
+        return bigKeys;
+    }
+
+    public void setBigKeys(boolean on) {
+        bigKeys = on;
+        prefs.edit().putBoolean("gp_big", on).apply();
+        if (on && layoutMode != LAYOUT_SKIN) {
+            // Only the full-body skin implements big-key mode (clusters fill the page, shoulders and
+            // menu keys hidden). Silently doing nothing in the floating layout read as "keys broke".
+            setLayoutMode(LAYOUT_SKIN);
+            android.widget.Toast.makeText(getContext(),
+                    "大键模式只在「皮肤」布局生效，已切到皮肤", android.widget.Toast.LENGTH_SHORT).show();
+        }
+        skinCacheDirty = true;
+        requestLayout();
+        invalidate();
     }
 
     // -------------------------------------------------------- layout offsets
@@ -738,7 +1041,7 @@ public final class GamepadView extends View {
             {"pad", "face", "l1", "r1", "l2", "r2", "select", "start", "stickL", "stickR"};
 
     private String offsetKey(String name) {
-        return "gp_off" + (layoutMode == LAYOUT_SKIN ? "s" : "f")
+        return "gp_off2" + (layoutMode == LAYOUT_SKIN ? "s" : "f")
                 + (landscapeLayout ? "l" : "p") + name;
     }
 
@@ -751,11 +1054,22 @@ public final class GamepadView extends View {
 
     /** Applies every saved per-item offset (portrait and landscape are stored separately). */
     private void applyStoredOffsets() {
+        final float pad = dp(4);
+        final RectF base = new RectF();
         for (String name : OFFSET_ITEMS) {
             float[] o = offsetOf(name);
             if (o[0] == 0f && o[1] == 0f) continue;
             float dx = dp(o[0]);
             float dy = dp(o[1]);
+            if (!bodyRect.isEmpty()) {
+                rawRect(name, base);
+                if (!base.isEmpty()) {
+                    if (base.left + dx < bodyRect.left + pad) dx = bodyRect.left + pad - base.left;
+                    if (base.right + dx > bodyRect.right - pad) dx = bodyRect.right - pad - base.right;
+                    if (base.top + dy < bodyRect.top + pad) dy = bodyRect.top + pad - base.top;
+                    if (base.bottom + dy > bodyRect.bottom - pad) dy = bodyRect.bottom - pad - base.bottom;
+                }
+            }
             if ("pad".equals(name)) {
                 padCx += dx;
                 padCy += dy;
@@ -785,10 +1099,13 @@ public final class GamepadView extends View {
                 start.rect.offset(dx, dy);
             } else if ("stickL".equals(name)) {
                 stickLRect.offset(dx, dy);
+                stickLZone.offset(dx, dy);
             } else if ("stickR".equals(name)) {
                 stickRRect.offset(dx, dy);
+                stickRZone.offset(dx, dy);
             }
         }
+        skinCacheDirty = true;
     }
 
     private void nudgeOffset(String name, float ddx, float ddy) {
@@ -801,6 +1118,24 @@ public final class GamepadView extends View {
         if (cur == null) return;
         String key = offsetKey(name);
         prefs.edit().putFloat(key + "_x", cur[0]).putFloat(key + "_y", cur[1]).apply();
+    }
+
+    /** Debug/recovery: drops custom positions for every layout + orientation combination. */
+    public void resetAllLayoutOffsets() {
+        liveOffsets.clear();
+        SharedPreferences.Editor editor = prefs.edit();
+        for (String mode : new String[]{"s", "f"}) {
+            for (String orient : new String[]{"l", "p"}) {
+                for (String name : OFFSET_ITEMS) {
+                    String key = "gp_off" + mode + orient + name;
+                    editor.remove(key + "_x").remove(key + "_y");
+                }
+            }
+        }
+        editor.apply();
+        skinCacheDirty = true;
+        layout();
+        invalidate();
     }
 
     /** Drops every custom position for the current layout + orientation. */
@@ -848,7 +1183,13 @@ public final class GamepadView extends View {
         } else if ("stickR".equals(name)) {
             out.set(stickRRect);
         }
-        if (!out.isEmpty()) out.inset(-dp(6), -dp(6));
+        return out;
+    }
+
+    /** Same as {@link #itemRect} but without the touch slop inflation; used to keep keys on screen. */
+    private RectF rawRect(String name, RectF out) {
+        itemRect(name, out);
+        if (!out.isEmpty()) out.inset(dp(6), dp(6));
         return out;
     }
 
@@ -910,8 +1251,152 @@ public final class GamepadView extends View {
             rx = ax;
             ry = ay;
         }
-        send();
+        // Touch screens report at 120-240 Hz while the host polls at ~125 Hz; sending every sample
+        // floods the Bluetooth queue and pushes button presses behind joystick frames.
+        final int minGap = fastMode ? 20 : 8;
+        long now = SystemClock.uptimeMillis();
+        if (now - lastStickSendAt >= minGap) {
+            lastStickSendAt = now;
+            stickSendScheduled = false;
+            send();
+        } else if (!stickSendScheduled) {
+            stickSendScheduled = true;
+            postDelayed(() -> {
+                stickSendScheduled = false;
+                lastStickSendAt = SystemClock.uptimeMillis();
+                send();
+            }, minGap - (now - lastStickSendAt));
+        }
+        // Fast mode: the knob position is cosmetic, so skip the redraw (60-160 Hz) and save the
+        // whole frame for the next real key press.
+        if (!fastMode) invalidate();
+    }
+
+    /**
+     * Analog movement pad (v0.31): the whole disc is the touch area, the knob follows the thumb and
+     * the output is the L stick axes (lx/ly). When "摇杆同时发方向键" is on we additionally emit a
+     * hat switch value, which is what old console-style emulators expect.
+     */
+    private void updatePadStick(float px, float py) {
+        if (discRect.isEmpty()) return;
+        float cx = discRect.centerX();
+        float cy = discRect.centerY();
+        float rad = Math.max(dp(8), discRect.width() / 2f);
+        float nx = (px - cx) / rad;
+        float ny = (py - cy) / rad;
+        float len = (float) Math.hypot(nx, ny);
+        if (len > 1f) {
+            nx /= len;
+            ny /= len;
+            len = 1f;
+        }
+        int ax = Math.round(nx * 127f);
+        int ay = Math.round(ny * 127f);
+        int hat = HAT_NEUTRAL;
+        if (padStickHatCompat && len > 0.22f) {
+            double deg = Math.toDegrees(Math.atan2(ny, nx));
+            int dir = (int) Math.round((deg + 90.0) / 45.0) % 8;
+            if (dir < 0) dir += 8;
+            hat = dir;
+        }
+        if (ax == lx && ay == ly && hat == padStickHat) return;
+        lx = ax;
+        ly = ay;
+        padStickHat = hat;
+        // Same throttle as the sockets: report at most every 8 ms so button presses never queue
+        // behind a flood of analog frames.
+        final int minGap = fastMode ? 20 : 8;
+        long now = SystemClock.uptimeMillis();
+        if (now - lastStickSendAt >= minGap) {
+            lastStickSendAt = now;
+            stickSendScheduled = false;
+            send();
+        } else if (!stickSendScheduled) {
+            stickSendScheduled = true;
+            postDelayed(() -> {
+                stickSendScheduled = false;
+                lastStickSendAt = SystemClock.uptimeMillis();
+                send();
+            }, minGap - (now - lastStickSendAt));
+        }
+        if (!fastMode) invalidate();
+    }
+
+    /**
+     * Debug only: replays a scripted finger so the whole UI path (hit zone -> stick -> HID) can be
+     * exercised over adb, which MIUI refuses to drive with `input tap`.
+     * 1 = tap A, 2 = right stick drag, 3 = left stick drag, 4 = every face/shoulder key once.
+     */
+    public void debugSyntheticTouch(final int scenario) {
+        final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+        final long t0 = SystemClock.uptimeMillis();
+        if (scenario == 5 || scenario == 6) {
+            // Analog movement pad: 5 = press and hold at "up-right", 6 = release.
+            if (discRect.isEmpty()) return;
+            final float cx = discRect.centerX();
+            final float cy = discRect.centerY();
+            final float d = discRect.width() * 0.30f;
+            if (scenario == 5) {
+                post(() -> dispatchTouchEvent(debugEvent(t0, t0, MotionEvent.ACTION_DOWN, cx, cy)));
+                handler.postDelayed(() -> dispatchTouchEvent(
+                        debugEvent(t0, t0 + 60, MotionEvent.ACTION_MOVE, cx + d, cy - d)), 60);
+            } else {
+                handler.postDelayed(() -> dispatchTouchEvent(
+                        debugEvent(t0, t0 + 60, MotionEvent.ACTION_UP, cx + d, cy - d)), 60);
+            }
+            return;
+        }
+        if (scenario == 2 || scenario == 3) {
+            final RectF r = scenario == 2 ? stickRRect : stickLRect;
+            if (r.isEmpty()) return;
+            final float cx = r.centerX();
+            final float cy = r.centerY();
+            final float dx = r.width() * 0.36f;
+            post(() -> dispatchTouchEvent(debugEvent(t0, t0, MotionEvent.ACTION_DOWN, cx, cy)));
+            handler.postDelayed(() -> dispatchTouchEvent(
+                    debugEvent(t0, t0 + 60, MotionEvent.ACTION_MOVE, cx + dx * 0.5f, cy)), 60);
+            handler.postDelayed(() -> dispatchTouchEvent(
+                    debugEvent(t0, t0 + 120, MotionEvent.ACTION_MOVE, cx + dx, cy)), 120);
+            handler.postDelayed(() -> dispatchTouchEvent(
+                    debugEvent(t0, t0 + 260, MotionEvent.ACTION_UP, cx + dx, cy)), 260);
+            return;
+        }
+        final java.util.List<float[]> spots = new java.util.ArrayList<>();
+        if (scenario == 4) {
+            for (Btn btn : all) {
+                if (btn.kind == KIND_DPAD) continue;
+                spots.add(new float[]{btn.rect.centerX(), btn.rect.centerY()});
+            }
+        } else {
+            Btn a = null;
+            for (Btn btn : all) if (btn.kind == KIND_FACE && "A".equals(btn.label)) a = btn;
+            if (a == null) return;
+            spots.add(new float[]{a.rect.centerX(), a.rect.centerY()});
+        }
+        long at = 0;
+        for (float[] p : spots) {
+            final float x = p[0], y = p[1];
+            final long downAt = t0 + at;
+            handler.postDelayed(() -> dispatchTouchEvent(
+                    debugEvent(downAt, downAt, MotionEvent.ACTION_DOWN, x, y)), at);
+            handler.postDelayed(() -> dispatchTouchEvent(
+                    debugEvent(downAt, downAt + 70, MotionEvent.ACTION_UP, x, y)), at + 70);
+            at += 220;
+        }
+    }
+
+    private MotionEvent debugEvent(long downTime, long eventTime, int action, float x, float y) {
+        MotionEvent ev = MotionEvent.obtain(downTime, eventTime, action, x, y, 0);
+        return ev;
+    }
+
+    private void releaseBtn(Btn btn) {
+        btn.releasePending = false;
+        if (countPointers(btn) > 0 || !btn.pressed) return;
+        btn.pressed = false;
+        mask &= ~btn.bit;
         invalidate();
+        send();
     }
 
     // ---------------------------------------------------- the layout editor
@@ -949,7 +1434,7 @@ public final class GamepadView extends View {
             float x0 = e.getX();
             float y0 = e.getY();
             if (editBarLeft.contains(x0, y0)) {
-                resetLayoutOffsets();
+                resetAllLayoutOffsets();
                 buzz(10);
                 return true;
             }
@@ -993,39 +1478,101 @@ public final class GamepadView extends View {
 
     // ------------------------------------------------------------ skin paint
 
+    /**
+     * Static skin layer (body, ring outlines, stick sockets). Painting it costs ~40 round-rect and
+     * circle ops plus a few labels per frame; caching it turns a frame into one bitmap blit, which is
+     * what makes fast taps land on time even while a stick is being dragged.
+     */
     private void drawSkinBody(Canvas canvas, boolean connected) {
+        final int w = getWidth();
+        final int h = getHeight();
+        if (w <= 0 || h <= 0) return;
+        if (skinCache == null || skinCacheDirty
+                || skinCache.getWidth() != w || skinCache.getHeight() != h) {
+            buildSkinCache(w, h);
+        }
+        if (skinCache != null) canvas.drawBitmap(skinCache, 0f, 0f, null);
+        // Only the stick knobs move, so they stay live.
+        drawStickKnob(canvas, stickLRect, lx, ly, "L");
+        drawStickKnob(canvas, stickRRect, rx, ry, "R");
+    }
+
+    private void buildSkinCache(int w, int h) {
+        try {
+            skinCache = android.graphics.Bitmap.createBitmap(
+                    w, h, android.graphics.Bitmap.Config.ARGB_8888);
+        } catch (OutOfMemoryError e) {
+            skinCache = null;
+            skinCacheDirty = false;
+            return;
+        }
+        Canvas c = new Canvas(skinCache);
         float rad = dp(landscapeLayout ? 34f : 42f);
         fillPaint.setColor(0xFF2C3042);
-        canvas.drawRoundRect(bodyRect, rad, rad, fillPaint);
+        c.drawRoundRect(bodyRect, rad, rad, fillPaint);
         edgePaint.setColor(0xFF363A4E);
         edgePaint.setStrokeWidth(dp(2f));
-        canvas.drawRoundRect(bodyRect, rad, rad, edgePaint);
+        c.drawRoundRect(bodyRect, rad, rad, edgePaint);
 
         edgePaint.setColor(0xFFD3DAE7);
         edgePaint.setStrokeWidth(dp(2.2f));
-        canvas.drawCircle(padCx, padCy, padHalf, edgePaint);
-        if (faceRingR > 0f) canvas.drawCircle(faceCx, faceCy, faceRingR, edgePaint);
-        drawStick(canvas, stickLRect, lx, ly, "L");
-        drawStick(canvas, stickRRect, rx, ry, "R");
+        c.drawCircle(padCx, padCy, padHalf, edgePaint);
+        if (faceRingR > 0f) c.drawCircle(faceCx, faceCy, faceRingR, edgePaint);
+        drawStickSocket(c, stickLRect, "L");
+        drawStickSocket(c, stickRRect, "R");
         edgePaint.setStrokeWidth(dp(1.2f));
+        edgePaint.setAlpha(255);
+        skinCacheDirty = false;
     }
 
-    private void drawStick(Canvas canvas, RectF r, int ax, int ay, String label) {
+    /** Static part of a stick: dark cup, rim, crosshair ticks and the caption. Goes into skinCache. */
+    private void drawStickSocket(Canvas canvas, RectF r, String label) {
         if (r.isEmpty()) return;
         float cx = r.centerX();
         float cy = r.centerY();
         float rad = r.width() / 2f;
+        fillPaint.setColor(0xFF181D29);
+        canvas.drawCircle(cx, cy, rad, fillPaint);
         edgePaint.setColor(0xFFD3DAE7);
         edgePaint.setStrokeWidth(dp(2.2f));
+        edgePaint.setAlpha(210);
         canvas.drawCircle(cx, cy, rad, edgePaint);
-        float travel = rad * 0.55f;
+        edgePaint.setAlpha(255);
+        edgePaint.setColor(0x66D3DAE7);
+        edgePaint.setStrokeWidth(dp(1.6f));
+        for (int i = 0; i < 4; i++) {
+            double ang = Math.toRadians(i * 90);
+            float tx = (float) Math.cos(ang);
+            float ty = (float) Math.sin(ang);
+            canvas.drawLine(cx + tx * rad * 0.72f, cy + ty * rad * 0.72f,
+                    cx + tx * rad * 0.92f, cy + ty * rad * 0.92f, edgePaint);
+        }
+        if (!landscapeLayout) {
+            smallPaint.setTextSize(dp(9));
+            smallPaint.setColor(0x99D3DAE7);
+            smallPaint.setTextAlign(Paint.Align.CENTER);
+            canvas.drawText("摇杆", cx, cy + rad + dp(12), smallPaint);
+            smallPaint.setTextSize(dp(10));
+        }
+    }
+
+    /** Moving part of a stick (knob + letter); drawn live on top of the cached socket. */
+    private void drawStickKnob(Canvas canvas, RectF r, int ax, int ay, String label) {
+        if (r.isEmpty()) return;
+        float cx = r.centerX();
+        float cy = r.centerY();
+        float rad = r.width() / 2f;
+        boolean active = ax != 0 || ay != 0;
+        float travel = rad * 0.52f;
         float kx = cx + travel * (ax / 127f);
         float ky = cy + travel * (ay / 127f);
-        fillPaint.setColor(0xFFEDF0F6);
-        canvas.drawCircle(kx, ky, rad * 0.45f, fillPaint);
-        smallPaint.setColor(0xFF3E4657);
+        fillPaint.setColor(active ? Ui.ACCENT : 0xFFEDF0F6);
+        canvas.drawCircle(kx, ky, rad * 0.54f, fillPaint);
+        smallPaint.setColor(active ? 0xFF0B1020 : 0xFF3E4657);
         smallPaint.setTextAlign(Paint.Align.CENTER);
-        canvas.drawText(label, kx, ky + dp(4), smallPaint);
+        smallPaint.setTextSize(dp(13));
+        canvas.drawText(label, kx, ky + dp(4.5f), smallPaint);
+        smallPaint.setTextSize(dp(10));
         smallPaint.setColor(Ui.TEXT);
     }
 
@@ -1071,6 +1618,7 @@ public final class GamepadView extends View {
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
+        skinCacheDirty = true;
         layout();
     }
 
@@ -1090,6 +1638,8 @@ public final class GamepadView extends View {
         }
         if (padType == PAD_DISC) {
             drawDisc(canvas, connected);
+        } else if (padType == PAD_STICK) {
+            drawPadStick(canvas, connected);
         } else {
             drawDpadKey(canvas, up, connected);
             drawDpadKey(canvas, down, connected);
@@ -1100,12 +1650,14 @@ public final class GamepadView extends View {
         drawFace(canvas, y, connected);
         drawFace(canvas, a, connected);
         drawFace(canvas, b, connected);
-        drawPill(canvas, l1, connected);
-        drawPill(canvas, r1, connected);
-        if (layoutMode == LAYOUT_SKIN) {
-            drawPill(canvas, l2, connected);
-            drawPill(canvas, r2, connected);
+        if (debugLog) {
+            android.util.Log.d("PhoneKB-GP", "draw mode=" + layoutMode + " l2=" + l2.rect
+                    + " fill=" + Integer.toHexString(l2.fill) + " r2=" + r2.rect);
         }
+        drawPill(canvas, l1, connected);
+        drawPill(canvas, l2, connected);
+        drawPill(canvas, r1, connected);
+        drawPill(canvas, r2, connected);
         drawPill(canvas, select, connected);
         drawPill(canvas, start, connected);
         drawTouchpadOverlay(canvas, connected);
@@ -1203,18 +1755,36 @@ public final class GamepadView extends View {
 
         // scroll column (kept short so it never runs into the nav stack)
         if (!tpScrollRect.isEmpty()) {
-            fillPaint.setColor(blend(Ui.SURFACE, Ui.SURFACE_2, 0.75f));
-            canvas.drawRoundRect(tpScrollRect, dp(12), dp(12), fillPaint);
-            iconPaint.setColor(Ui.TEXT_DIM);
-            iconPaint.setStrokeWidth(dp(2f));
             float cx = tpScrollRect.centerX();
+            float midY = tpScrollRect.centerY();
             float upY = tpScrollRect.top + dp(20);
             float downY = tpScrollRect.bottom - dp(20);
+            fillPaint.setColor(blend(Ui.SURFACE, Ui.SURFACE_2, 0.75f));
+            canvas.drawRoundRect(tpScrollRect, dp(12), dp(12), fillPaint);
+            // Upper half = scroll up, lower half = scroll down; hold repeats. The pressed half lights
+            // up so it is obvious these chevrons are keys and not decoration.
+            if (tpScrollPressed != 0) {
+                float[] radii;
+                if (tpScrollPressed > 0) {
+                    radii = new float[]{dp(12), dp(12), dp(12), dp(12), 0, 0, 0, 0};
+                    scratch.set(tpScrollRect.left, tpScrollRect.top, tpScrollRect.right, midY);
+                } else {
+                    radii = new float[]{0, 0, 0, 0, dp(12), dp(12), dp(12), dp(12)};
+                    scratch.set(tpScrollRect.left, midY, tpScrollRect.right, tpScrollRect.bottom);
+                }
+                fillPaint.setColor(blend(Ui.SURFACE_2, Ui.ACCENT, 0.35f));
+                Path lit = new Path();
+                lit.addRoundRect(scratch, radii, Path.Direction.CW);
+                canvas.drawPath(lit, fillPaint);
+            }
+            iconPaint.setStrokeWidth(dp(2f));
+            iconPaint.setColor(tpScrollPressed > 0 ? Ui.ACCENT : Ui.TEXT_DIM);
             Path chev = new Path();
             chev.moveTo(cx - dp(7), upY + dp(4));
             chev.lineTo(cx, upY);
             chev.lineTo(cx + dp(7), upY + dp(4));
             canvas.drawPath(chev, iconPaint);
+            iconPaint.setColor(tpScrollPressed < 0 ? Ui.ACCENT : Ui.TEXT_DIM);
             Path chev2 = new Path();
             chev2.moveTo(cx - dp(7), downY - dp(4));
             chev2.lineTo(cx, downY);
@@ -1417,6 +1987,53 @@ public final class GamepadView extends View {
         }
     }
 
+    /** Analog thumb stick: dark socket, four ticks, knob that follows the thumb 1:1. */
+    private void drawPadStick(Canvas canvas, boolean connected) {
+        if (discRect.isEmpty()) return;
+        float cx = discRect.centerX();
+        float cy = discRect.centerY();
+        float r = discRect.width() / 2f;
+        fillPaint.setColor(Ui.KEY);
+        canvas.drawCircle(cx, cy, r, fillPaint);
+        canvas.drawCircle(cx, cy, r, discStroke);
+
+        iconPaint.setStyle(Paint.Style.STROKE);
+        iconPaint.setStrokeCap(Paint.Cap.ROUND);
+        iconPaint.setStrokeWidth(dp(2f));
+        iconPaint.setColor(connected ? Ui.TEXT : Ui.TEXT_DIM);
+        for (int i = 0; i < 4; i++) {
+            double ang = Math.toRadians(45 + i * 90);
+            float c = (float) Math.cos(ang);
+            float s = (float) Math.sin(ang);
+            canvas.drawLine(cx + c * r * 0.74f, cy + s * r * 0.74f,
+                    cx + c * r * 0.90f, cy + s * r * 0.90f, iconPaint);
+        }
+        iconPaint.setStyle(Paint.Style.FILL);
+
+        boolean active = padStickPointer != -1 || lx != 0 || ly != 0;
+        float travel = r * 0.52f;
+        float kx = cx + travel * (lx / 127f);
+        float ky = cy + travel * (ly / 127f);
+        fillPaint.setColor(active ? blend(Ui.TEXT, Ui.ACCENT, 0.35f) : Ui.TEXT);
+        canvas.drawCircle(kx, ky, r * 0.54f, fillPaint);
+        fillPaint.setColor(Ui.TEXT_DIM);
+        canvas.drawCircle(cx, cy, r * 0.09f, fillPaint);
+
+        smallPaint.setTextSize(dp(swTextSize()));
+        smallPaint.setColor(active ? Ui.ACCENT : Ui.TEXT_DIM);
+        String hint;
+        if (active && padStickHat != HAT_NEUTRAL) {
+            hint = "拖动中：" + DIR_NAMES[padStickHat];
+        } else if (active) {
+            hint = "拖动中（X/Y 模拟轴）";
+        } else {
+            hint = padStickHatCompat ? "按住拖动 · 同时发方向键" : "按住拖动 · 摇杆头跟手";
+        }
+        float hintY = cy + r + dp(16);
+        if (hintY > getHeight() - dp(6)) hintY = cy - r - dp(10);
+        canvas.drawText(hint, cx, hintY, smallPaint);
+    }
+
     private void drawDiscChevron(Canvas canvas, float cx, float cy, int dir, float size, int color) {
         iconPaint.setColor(color);
         iconPaint.setStrokeWidth(Math.max(dp(2.2f), size * 0.22f));
@@ -1479,6 +2096,7 @@ public final class GamepadView extends View {
     }
 
     private void drawPill(Canvas canvas, Btn btn, boolean connected) {
+        if (btn.rect.isEmpty()) return;
         fillPaint.setColor(btn.pressed ? Ui.KEY_PRESSED : btn.fill);
         float radius = Math.min(btn.rect.height() / 2f, dp(16));
         canvas.drawRoundRect(btn.rect, radius, radius, fillPaint);
@@ -1499,14 +2117,18 @@ public final class GamepadView extends View {
     }
 
     private Btn hit(float x, float y) {
+        // Slightly enlarged hit zones: a fast tap often lands a few dp off the drawn key, and
+        // making the user aim exactly costs more perceived responsiveness than the rare mis-hit.
+        final float slop = dp(6f);
         for (Btn btn : all) {
-            if (btn.kind == KIND_DPAD && padType == PAD_DISC) continue;
+            if (btn.kind == KIND_DPAD && padType != PAD_BUTTONS) continue;
             if (btn.kind == KIND_FACE) {
                 float dx = x - btn.rect.centerX();
                 float dy = y - btn.rect.centerY();
-                float limit = btn.radius * 1.06f;
+                float limit = btn.radius * 1.06f + slop;
                 if (dx * dx + dy * dy <= limit * limit) return btn;
-            } else if (btn.rect.contains(x, y)) {
+            } else if (x >= btn.rect.left - slop && x <= btn.rect.right + slop
+                    && y >= btn.rect.top - slop && y <= btn.rect.bottom + slop) {
                 return btn;
             }
         }
@@ -1584,23 +2206,11 @@ public final class GamepadView extends View {
                         return true;
                     }
                 }
-            }
-            if (layoutMode == LAYOUT_SKIN) {
-                if (stickLPointer == -1 && stickLRect.contains(x, y)) {
-                    stickLPointer = e.getPointerId(index);
-                    updateStick(true, x, y);
+                if (!tpScrollRect.isEmpty() && tpScrollRect.contains(x, y)) {
+                    // Upper half scrolls up, lower half scrolls down; holding repeats.
+                    startTpScroll(y < tpScrollRect.centerY() ? 1 : -1);
                     return true;
                 }
-                if (stickRPointer == -1 && stickRRect.contains(x, y)) {
-                    stickRPointer = e.getPointerId(index);
-                    updateStick(false, x, y);
-                    return true;
-                }
-            }
-            if (padType == PAD_DISC && inDisc(x, y)) {
-                discPointer = e.getPointerId(index);
-                updateDisc(x, y);
-                return true;
             }
             if (tpOpen && tpPanelRect.contains(x, y) && tpMode != TP_PAD) {
                 // Overlay wins over whatever sits underneath it (it can overlap ABXY at high sizes).
@@ -1609,16 +2219,44 @@ public final class GamepadView extends View {
                 startTouchPad(e, index);
                 return true;
             }
+            // A key drawn under the finger always wins, even when a stick's grab zone reaches over it.
+            // Before this the stick zone (ring * 1.45) could swallow the whole R1/L1 pill, which made
+            // the shoulder buttons look broken ("有时用不了").
             Btn btn = hit(x, y);
             if (btn != null) {
                 pointers.put(e.getPointerId(index), btn);
                 if (!btn.pressed) {
                     btn.pressed = true;
+                    btn.releasePending = false;
+                    btn.downAt = SystemClock.uptimeMillis();
                     mask |= btn.bit;
-                    buzz(10);
-                    invalidate();
+                    // Report first: haptics/drawing cost 2-5 ms and used to delay the key itself.
                     send();
+                    invalidate();
+                    buzz(10);
                 }
+                return true;
+            }
+            if (layoutMode == LAYOUT_SKIN) {
+                if (stickLPointer == -1 && (stickLZone.contains(x, y) || stickLRect.contains(x, y))) {
+                    stickLPointer = e.getPointerId(index);
+                    updateStick(true, x, y);
+                    return true;
+                }
+                if (stickRPointer == -1 && (stickRZone.contains(x, y) || stickRRect.contains(x, y))) {
+                    stickRPointer = e.getPointerId(index);
+                    updateStick(false, x, y);
+                    return true;
+                }
+            }
+            if (padType == PAD_STICK && padStickPointer == -1 && inDisc(x, y)) {
+                padStickPointer = e.getPointerId(index);
+                updatePadStick(x, y);
+                return true;
+            }
+            if (padType == PAD_DISC && inDisc(x, y)) {
+                discPointer = e.getPointerId(index);
+                updateDisc(x, y);
                 return true;
             }
             // Nothing else grabbed this finger: it belongs to the touch pad.
@@ -1658,6 +2296,10 @@ public final class GamepadView extends View {
                 int idx = e.findPointerIndex(stickRPointer);
                 if (idx >= 0) updateStick(false, e.getX(idx), e.getY(idx));
             }
+            if (padStickPointer != -1) {
+                int idx = e.findPointerIndex(padStickPointer);
+                if (idx >= 0) updatePadStick(e.getX(idx), e.getY(idx));
+            }
             if (discPointer != -1) {
                 int idx = e.findPointerIndex(discPointer);
                 if (idx >= 0) updateDisc(e.getX(idx), e.getY(idx));
@@ -1684,6 +2326,10 @@ public final class GamepadView extends View {
                 invalidate();
                 return true;
             }
+            if (tpScrollPressed != 0 && action == MotionEvent.ACTION_UP) {
+                stopTpScroll();
+                return true;
+            }
             if (navPressed >= 0 && action == MotionEvent.ACTION_UP) {
                 int which = navPressed;
                 navPressed = -1;
@@ -1705,6 +2351,15 @@ public final class GamepadView extends View {
                 // A secondary finger lifted; keep tracking the primary one.
                 tpMaxPointers = Math.max(1, e.getPointerCount() - 1);
                 tpLastScrollY = averageY(e);
+                return true;
+            }
+            if (pointerId == padStickPointer) {
+                padStickPointer = -1;
+                padStickHat = HAT_NEUTRAL;
+                lx = 0;
+                ly = 0;
+                send();
+                invalidate();
                 return true;
             }
             if (padType == PAD_DISC && pointerId == discPointer) {
@@ -1733,10 +2388,13 @@ public final class GamepadView extends View {
             }
             Btn btn = pointers.remove(pointerId);
             if (btn != null && countPointers(btn) == 0) {
-                btn.pressed = false;
-                mask &= ~btn.bit;
-                invalidate();
-                send();
+                long held = SystemClock.uptimeMillis() - btn.downAt;
+                if (held < MIN_HOLD_MS && !btn.releasePending) {
+                    btn.releasePending = true;
+                    postDelayed(() -> releaseBtn(btn), Math.max(1L, MIN_HOLD_MS - held));
+                } else if (!btn.releasePending) {
+                    releaseBtn(btn);
+                }
             }
             return true;
         }
@@ -1752,6 +2410,7 @@ public final class GamepadView extends View {
             touchChipPressed = false;
             tpChipPressed = false;
             navPressed = -1;
+            stopTpScroll();
             removeCallbacks(holdLongPress);
             removeCallbacks(editPress);
             blankPressed = false;
@@ -1779,6 +2438,7 @@ public final class GamepadView extends View {
         if (tpOpen == open) return;
         tpOpen = open;
         navPressed = -1;
+        stopTpScroll();
         holdPressed = false;
         holdDragging = false;
         removeCallbacks(holdLongPress);
@@ -1800,6 +2460,25 @@ public final class GamepadView extends View {
         invalidate();
     }
 
+    private void startTpScroll(int dir) {
+        tpScrollPressed = dir;
+        buzz(10);
+        if (hid != null) hid.mouseWheel(dir);
+        removeCallbacks(tpScrollRepeat);
+        postDelayed(tpScrollRepeat, 220);
+        invalidate();
+    }
+
+    private void stopTpScroll() {
+        if (tpScrollPressed == 0) {
+            removeCallbacks(tpScrollRepeat);
+            return;
+        }
+        tpScrollPressed = 0;
+        removeCallbacks(tpScrollRepeat);
+        invalidate();
+    }
+
     private void performNav(int which) {
         if (hid == null) {
             buzz(10);
@@ -1816,6 +2495,12 @@ public final class GamepadView extends View {
     }
 
     private boolean inTouchArea(float x, float y) {
+        // The sticks own their whole grab circle; falling through to the touch pad here is what made
+        // a slightly-off thumb move the pointer instead of the right stick.
+        if (layoutMode == LAYOUT_SKIN
+                && (stickLZone.contains(x, y) || stickRZone.contains(x, y))) {
+            return false;
+        }
         if (touchMode == TOUCH_PANEL) return touchRect.contains(x, y);
         // Full mode: every empty pixel, but keep a palm guard along the screen edge.
         float guard = dp(10);
@@ -1886,7 +2571,7 @@ public final class GamepadView extends View {
         if (dx != 0 || dy != 0) {
             tpAccumX -= dx;
             tpAccumY -= dy;
-            if (hid != null) hid.mouseMove(dx, dy);
+            if (hid != null) hid.mouseMove(dx, dy, e.getEventTime());
         }
         float movedX = Math.abs(x - tpDownX);
         float movedY = Math.abs(y - tpDownY);
@@ -1952,8 +2637,15 @@ public final class GamepadView extends View {
 
     private void send() {
         if (hid == null) return;
-        int hat = padType == PAD_DISC ? discHat : hatFromMask(mask);
-        hid.sendGamepadFull(mask, hat, lx, ly, rx, ry);
+        int hat = padType == PAD_DISC ? discHat
+                : (padType == PAD_STICK ? padStickHat : hatFromMask(mask));
+        int out = mask;
+        if (PointerSettings.ltCompat()) {
+            // Hosts/games that only map BTN_TL / BTN_TR ignore the trigger buttons 9 and 10.
+            if ((mask & HidConstants.GP_L2) != 0) out |= HidConstants.GP_L1;
+            if ((mask & HidConstants.GP_R2) != 0) out |= HidConstants.GP_R1;
+        }
+        hid.sendGamepadFull(out, hat, lx, ly, rx, ry);
     }
 
     /** Hat value for the four d-pad bits (same encoding the HID manager uses). */
@@ -1980,12 +2672,16 @@ public final class GamepadView extends View {
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         final int originalLayout = layoutMode;
         final int originalType = padType;
+        final boolean originalStickHat = padStickHatCompat;
         final float originalPadScale = padScale;
         final float originalBtnScale = btnScale;
         final boolean originalCompat = hatCompat;
         final int originalTouch = touchMode;
         final boolean originalMoveOnly = touchMoveOnly;
         final boolean originalHaptics = haptics;
+        final boolean originalFast = fastMode;
+        final int originalAxis = stickAxisMode;
+        final boolean originalBig = bigKeys;
 
         final boolean land = getResources().getConfiguration().orientation
                 == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
@@ -2003,8 +2699,8 @@ public final class GamepadView extends View {
         box.addView(title);
 
         final int[] typeHolder = {padType};
-        LinearLayout typeRow = segment(ctx, new String[]{"按键", "圆盘"}, padType, which -> {
-            typeHolder[0] = which == 0 ? PAD_BUTTONS : PAD_DISC;
+        LinearLayout typeRow = segment(ctx, new String[]{"按键", "圆盘", "摇杆"}, padType, which -> {
+            typeHolder[0] = which == 0 ? PAD_BUTTONS : (which == 1 ? PAD_DISC : PAD_STICK);
             setPadType(typeHolder[0]);
         });
         final int[] layoutHolder = {layoutMode};
@@ -2027,17 +2723,26 @@ public final class GamepadView extends View {
 
         addOption(box, ctx, "移动盘类型", typeRow, land, land ? 8 : 14);
 
+        final boolean[] stickHatHolder = {padStickHatCompat};
+        LinearLayout stickHatRow = segment(ctx, new String[]{"关", "开"}, padStickHatCompat ? 1 : 0, which -> {
+            stickHatHolder[0] = which == 1;
+            setPadStickHatCompat(stickHatHolder[0]);
+        });
+        addOption(box, ctx, "摇杆同时发方向键", stickHatRow, land, land ? 7 : 12);
+
         LinearLayout.LayoutParams padLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         padLp.topMargin = land ? dpi(9) : dpi(14);
         box.addView(settingsLabel(ctx, "移动盘大小"), padLp);
         box.addView(sliderRow(ctx, padScale, this::setPadScale));
+        box.addView(realPercentLabel(ctx, true));
 
         LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         btnLp.topMargin = land ? dpi(7) : dpi(12);
         box.addView(settingsLabel(ctx, "按键大小（ABXY / 肩键 / 菜单键）"), btnLp);
         box.addView(sliderRow(ctx, btnScale, this::setBtnScale));
+        box.addView(realPercentLabel(ctx, false));
 
         final boolean[] compatHolder = {hatCompat};
         LinearLayout compatRow = segment(ctx, new String[]{"正常", "修正一格"}, hatCompat ? 1 : 0, which -> {
@@ -2062,6 +2767,13 @@ public final class GamepadView extends View {
         });
         addOption(box, ctx, "震动反馈", hapticRow, land, land ? 7 : 12);
 
+        final boolean[] fastHolder = {fastMode};
+        LinearLayout fastRow = segment(ctx, new String[]{"关", "开"}, fastMode ? 1 : 0, which -> {
+            fastHolder[0] = which == 1;
+            setFastMode(fastHolder[0]);
+        });
+        addOption(box, ctx, "极速模式（关震动 / 少重绘）", fastRow, land, land ? 7 : 12);
+
         final boolean[] moveHolder = {touchMoveOnly};
         LinearLayout moveRow = segment(ctx, new String[]{"完整", "只移动"}, touchMoveOnly ? 1 : 0, which -> {
             moveHolder[0] = which == 1;
@@ -2069,11 +2781,28 @@ public final class GamepadView extends View {
         });
         addOption(box, ctx, "触控点击", moveRow, land, land ? 7 : 12);
 
+        final int[] axisHolder = {stickAxisMode};
+        LinearLayout axisRow = segment(ctx, new String[]{"RX/RY", "Z/RZ"}, stickAxisMode, which -> {
+            axisHolder[0] = which;
+            setStickAxisMode(axisHolder[0]);
+        });
+        addOption(box, ctx, "右摇杆轴向（Z/RZ 需重新配对）", axisRow, land, land ? 7 : 12);
+
+        final boolean[] bigHolder = {bigKeys};
+        LinearLayout bigRow = segment(ctx, new String[]{"关", "开"}, bigKeys ? 1 : 0, which -> {
+            bigHolder[0] = which == 1;
+            setBigKeys(bigHolder[0]);
+        });
+        addOption(box, ctx, "大键模式（隐藏肩键 / 摇杆 / 菜单键 → 按键可放到最大）", bigRow, land, land ? 7 : 12);
+
         TextView hint = new TextView(ctx);
-        hint.setText(land
-                ? "只缩放按键本身。方向键偏一格时改成「修正一格」。"
-                : "只缩放按键本身，不改页面布局。圆盘：按住滑动选方向，松手回中。\n"
-                + "方向键整体偏一格（按左出下）：平板缓存了旧的蓝牙描述，重新配对可根治；临时办法改成「修正一格」。");
+        hint.setText("按键都在拇指自然位置上；上方「实际 N%」是本屏能放下的真实尺寸。\n"
+                + "摇杆抓取范围已放大到 1.9 倍半径，触控板不会再抢走摇杆附近的触点。\n"
+                + "右摇杆没反应：先看是不是游戏只认 Z/RZ —— 改成「Z/RZ」后在平板重新配对一次。\n"
+                + "方向键偏一格用「修正一格」；极速模式不震动、摇杆不重绘，按键更跟手。\n"
+                + "觉得按键还是不够大：打开「大键模式」，两组键会占满整页（肩键/摇杆/菜单键先收起来）。\n"
+                + "移动盘选「摇杆」：整块圆盘都能按，摇杆头跟手，推的是左摇杆 X/Y 轴；老模拟器只认方向键的话，"
+                + "把「摇杆同时发方向键」打开。");
         hint.setTextColor(Ui.TEXT_DIM);
         hint.setTextSize(11);
         LinearLayout.LayoutParams hintLp = new LinearLayout.LayoutParams(
@@ -2096,12 +2825,16 @@ public final class GamepadView extends View {
         cancel.setOnClickListener(v -> {
             setLayoutMode(originalLayout);
             setPadType(originalType);
+            setPadStickHatCompat(originalStickHat);
             setPadScale(originalPadScale);
             setBtnScale(originalBtnScale);
             setHatCompat(originalCompat);
             setTouchMode(originalTouch);
             setTouchMoveOnly(originalMoveOnly);
             setHaptics(originalHaptics);
+            setFastMode(originalFast);
+            setStickAxisMode(originalAxis);
+            setBigKeys(originalBig);
             dialog.dismiss();
         });
         TextView save = new TextView(ctx);
@@ -2118,6 +2851,7 @@ public final class GamepadView extends View {
             setTouchMode(touchHolder[0]);
             setTouchMoveOnly(moveHolder[0]);
             setHaptics(hapticHolder[0]);
+            setFastMode(fastHolder[0]);
             dialog.dismiss();
         });
         LinearLayout.LayoutParams cancelLp = new LinearLayout.LayoutParams(
@@ -2249,6 +2983,19 @@ public final class GamepadView extends View {
         row.addView(valueText, valueLp);
         row.setLayoutParams(rowLp);
         return row;
+    }
+
+    /**
+     * Small line under a size slider that reports the percentage which really fits the screen - the
+     * slider alone used to promise 200% while the layout silently capped at about 137%.
+     */
+    private TextView realPercentLabel(Context ctx, boolean pad) {
+        TextView tv = new TextView(ctx);
+        int[] holder = pad ? new int[]{realPadPercent} : new int[]{realBtnPercent};
+        tv.setText("本屏实际 " + holder[0] + "%");
+        tv.setTextColor(holder[0] < 95 ? Ui.WARN : Ui.TEXT_DIM);
+        tv.setTextSize(10);
+        return tv;
     }
 
     private TextView settingsLabel(Context ctx, String text) {

@@ -68,7 +68,6 @@ public class MainActivity extends Activity {
     private PowerButtonView powerButton;
     private TextView rotateButton;
     private TextView swapPill;
-    private TextView companionPill;
     private boolean twoHandSwapped;
 
     private final View[] pages = new View[TAB_NAMES.length];
@@ -151,6 +150,12 @@ public class MainActivity extends Activity {
             getWindow().setDecorFitsSystemWindows(false);
         }
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        if (launchIntent != null && launchIntent.getBooleanExtra("wake", false)) {
+            // Debug extra (--ez wake true): force the display on so adb screencap works
+            // even when the phone has gone to sleep.
+            setTurnScreenOn(true);
+            setShowWhenLocked(true);
+        }
         getWindow().setStatusBarColor(Ui.BG);
         getWindow().setNavigationBarColor(Ui.BG);
         prefs = getSharedPreferences("phonekb", MODE_PRIVATE);
@@ -256,7 +261,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         footer = new TextView(this);
-        footer.setText("PhoneKB v0.25.0 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手 · 伴侣 WiFi");
+        footer.setText("PhoneKB v0.36.1 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手");
         footer.setTextColor(Ui.TEXT_DIM);
         footer.setTextSize(11);
         footer.setGravity(Gravity.CENTER);
@@ -411,12 +416,6 @@ public class MainActivity extends Activity {
         rotateButton.setOnLongClickListener(v -> { resetOrientationToSystem(); return true; });
         bar.addCollapsible(rotateButton, chromePillLp(52), "旋转", this::toggleOrientation);
 
-        companionPill = chromePill("伴侣");
-        companionPill.setTextColor(Ui.TEXT);
-        companionPill.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
-        companionPill.setOnClickListener(v -> openCompanion());
-        bar.addCollapsible(companionPill, chromePillLp(56), "伴侣", this::openCompanion);
-
         pairButton = chromePill("配对");
         pairButton.setTextColor(Ui.TEXT);
         pairButton.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
@@ -482,15 +481,6 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         rLp.setMarginEnd(dp(8));
         header.addCollapsible(rotateButton, rLp, "旋转", this::toggleOrientation);
-
-        companionPill = plainText("伴侣", 13, Ui.TEXT_DIM);
-        companionPill.setPadding(dp(12), dp(8), dp(12), dp(8));
-        companionPill.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
-        companionPill.setOnClickListener(v -> openCompanion());
-        LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        cLp.setMarginEnd(dp(8));
-        header.addCollapsible(companionPill, cLp, "伴侣", this::openCompanion);
 
         pairButton = plainText("配对", 13, Ui.TEXT_DIM);
         pairButton.setPadding(dp(14), dp(8), dp(14), dp(8));
@@ -589,16 +579,6 @@ public class MainActivity extends Activity {
             }
         });
         mediaView = new MediaView(this, hid);
-        mediaView.setBrightnessListener(up -> {
-            final CompanionBridge bridge = CompanionBridge.get(this);
-            if (bridge.isConnected()) {
-                bridge.sendBright(up);
-            } else {
-                Toast.makeText(this,
-                        "这台平板不响应蓝牙亮度键。打开顶部「伴侣」并连上 WiFi 通道后，亮度键改走 WiFi 直接调系统亮度。",
-                        Toast.LENGTH_LONG).show();
-            }
-        });
         if (!landscape) {
             mediaView.setToolpadRow(true);
             mediaView.setTouchpadAction(() -> toggleOverlay(OVERLAY_TOUCHPAD));
@@ -1198,16 +1178,10 @@ public class MainActivity extends Activity {
     // ---------------------------------------------------------------- dialogs
 
     private void showPairingDialog() {
-        String name = "本机";
-        try {
-            BluetoothAdapter adapter = hid.getAdapter();
-            if (adapter != null && adapter.getName() != null) name = adapter.getName();
-        } catch (Exception ignored) {
-        }
         new AlertDialog.Builder(this)
                 .setTitle("在平板上配对手机")
-                .setMessage("1. 手机现已可被蓝牙搜索 5 分钟（设备名：" + name + "）\n"
-                        + "2. 打开平板 设置 → 蓝牙，搜索并点击这个名字\n"
+                .setMessage("1. 手机现已可被蓝牙搜索 5 分钟\n"
+                        + "2. 打开平板 设置 → 蓝牙，在「可用设备」里点你的手机（名字和手机「设置 → 我的设备」里显示的一致）\n"
                         + "3. 两端确认配对码后，手机顶部会显示「已连接」\n\n"
                         + "如果平板里还留着旧的配对记录，先点「忘记/取消配对」，再重新配一次。\n"
                         + "若状态显示注册失败：请先在手机设置中强制停止其他蓝牙键盘应用，再点状态文字重试。")
@@ -1223,19 +1197,21 @@ public class MainActivity extends Activity {
                         + "电脑布局：顶部一排快捷键 Ctrl+C / Ctrl+V / Ctrl+X / Ctrl+A / Alt+Tab，下面带 Tab、方向键和 Ctrl / Alt / Win，适合敲命令、远程桌面和组合键。\n\n"
                         + "指针灵敏度：触控板页触控卡片左上角的「灵敏度 1.0x」胶囊可以打开设置——指针速度 0.4x–2.5x（1.0x 就是以前的手感）、加速度（快扫自动加速）、滚轮速度（一次滑动滚几行）；改完对触控板页、单手遥控台、触控板浮层、手柄页触控区同时生效，并且会记住。\n\n"
                         + "触控板：单指滑动移动指针，单指点击=左键，双指点击=右键，双指上下滑=滚动，右侧 ↑↓ 按住连续滚动；左侧「数字」弹出数字键盘（输入密码），「键盘」弹出简易手机键盘（带数字行，数字也可用来选输入法的候选词），「菜单」等于平板菜单键。\n\n"
-                        + "媒体：上一首 / 播放暂停 / 下一首、音量加减、静音、CC、返回 / 主页 / 菜单 / 电源。\n\n"
-                        + "手柄：左上的「移动盘」按钮打开设置，里有三个段：「布局」可选 浮键 / 皮肤；「移动盘类型」按键 / 圆盘；「移动盘大小」「按键大小」两个 60%–150% 滑块（只缩放按键本身）。浮键＝现在这套：左下方向盘、右下 X/Y/A/B、两侧中段 L1/R1、菜单键在顶部条；皮肤＝整机手柄外观：圆角机身 + 十字键圆环 + ABXY 圆环 + LB/LT/RB/RT + 左右 L/R 模拟摇杆（摇杆是 4 个轴，换新版后平板要「忘记设备→重新配对」一次才会识别）+ 居中的 SELECT/START。自定义位置：在设置里点「编辑布局·拖动按键改位置」，或者在手柄页空白处按住 3 秒，进入编辑模式后每个键出现蓝虚线框，单指拖动即可挪位置，松手自动保存；顶部有「重置 / 完成」，横屏和竖屏各存一套。「触控」小键一键切换 关 / 中间 / 全屏：中间＝页面正中一块看得见边界的触控板；全屏＝除按键外整片空白都能触控。触控板手势和「触控板」页一致：单指移动、轻点＝左键、双指点击＝右键、双指上下滑＝滚动；「只移动」档位下只移指针不点击。注意：浮键布局下 LT/RT 不显示，皮肤布局才有肩键 LB/LT/RB/RT。\n\n"
+                        + "媒体页：从上到下是「触控板」快键、媒体卡和常用键卡。媒体卡第一排三个大方键：上一段 ⏮ / 播放暂停 ⏯ / 下一段 ⏭；第二排两个长条：−10s / ＋10s，点一次退或进 10 秒，按住连发（长按约 0.4 秒后每 0.1 秒发一次），上一段 / 下一段键按住也会连续跳。\n\n"
+                        + "常用键卡是 2 行 × 5 列的圆形大键：第一排 音量+ / 音量− / 静音 / 截屏 / 多任务，第二排 亮度− / 亮度+ / 返回 / 主页 / 菜单。截屏发的是蓝牙键盘的 PrintScreen 键，Android 会直接截屏；多任务发 Alt+Tab（系统「切换应用」快捷键）。\n\n"
+                        + "「帮助 → 更多设置」里可以调：指针点击方式（抬手点击 / 按下即点）、长按拖拽阈值（250 / 350 / 450 ms）、媒体页 −10s / ＋10s 发什么（上一段·下一段，或 ← / → 方向键——有些播放器只认方向键）、极速模式（少震动、移动中不重绘，更跟手）、界面大小，以及指针延迟测量。\n\n"
+                        + "手柄：左上的「移动盘」按钮打开设置，里有三个段：「布局」可选 浮键 / 皮肤；「移动盘类型」按键 / 圆盘 / 摇杆；「移动盘大小」「按键大小」两个 60%–150% 滑块（只缩放按键本身）。浮键＝现在这套：左下方向盘、右下 X/Y/A/B、两侧中段 L1/R1、菜单键在顶部条；皮肤＝整机手柄外观：圆角机身 + 十字键圆环 + ABXY 圆环 + LB/LT/RB/RT + 左右 L/R 模拟摇杆（摇杆是 4 个轴，换新版后平板要「忘记设备→重新配对」一次才会识别）+ 居中的 SELECT/START。自定义位置：在设置里点「编辑布局·拖动按键改位置」，或者在手柄页空白处按住 3 秒，进入编辑模式后每个键出现蓝虚线框，单指拖动即可挪位置，松手自动保存；顶部有「重置 / 完成」，横屏和竖屏各存一套。「触控」小键一键切换 关 / 中间 / 全屏：中间＝页面正中一块看得见边界的触控板；全屏＝除按键外整片空白都能触控。触控板手势和「触控板」页一致：单指移动、轻点＝左键、双指点击＝右键、双指上下滑＝滚动；「只移动」档位下只移指针不点击。浮键布局下也有一行四个肩键：L1 / LT（左）与 RT / R1（右），皮肤布局则是 LB/LT/RB/RT；如果老游戏只认 L1/R1、不认 LT/RT，可以在「帮助 → 更多设置 → 手柄 LT / RT 兼容」打开，让 LT/RT 同时发 L1/R1。移动盘类型选「摇杆」时，整块圆盘都能按、摇杆头跟手，推的是左摇杆 X/Y 模拟轴；只有当游戏只认方向键时才把「摇杆同时发方向键」打开（打开后左上斜向会退化成左）。\n\n"
                         + "手柄页触控板浮层：右上角的「触控板」小键点一下，右侧浮出一块触控板浮层（单指移动、轻点＝左键、双指点击＝右键、双指滑＝滚动），右下角竖排是 返回 / 主页 / 后台。点浮层外面的任何地方就会收起，左半屏的方向盘和 ABXY 照样能按；再点一次「触控板」收起。浮层左上角有个「⇔」把手：按住约 0.3 秒后左右拖动可以挪动整块浮层的位置，松手就记住，下次打开还在那儿。\n\n"
                         + "双手模式：左边是触控板，右边是按键板（从上到下：音量、媒体、返回 / 主页 / 后台、数字 / 键盘），左右手各管一半。双手页顶部有「互换」键：点一下把触控区和按键区对调（横屏左右对调，竖屏上下对调），方便左右手习惯不同的人；互换状态会记住。\n\n"
                         + "单手模式：右侧（或左侧）面板集中了大触控区和常用键；点「键盘」切成拇指键盘，点「切到遥控台」切回。\n\n"
-                        + "竖屏：键盘页上半部分是触控区、下半部分是贴底的键盘（按键大小和普通手机键盘接近）；中间的分隔条可以上下拖动调整两区比例（拖到 48% / 58% / 62% 附近会吸附，双击分隔条恢复默认 58/42）。触控板页和媒体页的功能区也贴着屏幕底部，顶部分隔条可以拖动调整功能区高度（上方留空方便拇指操作，双击分隔条恢复默认：触控板页 80% / 媒体页 78%）；媒体页顶部还有「触控板」键，可以直接弹出触控板浮层；媒体页还多了「亮度 −/＋」两个键（调屏幕亮度，横屏时它们会移到媒体条左右两侧）。亮度键会先发蓝牙 HID；像 vivo 这类不响应亮度键的平板，请打开顶栏「伴侣」连上 WiFi，并在平板伴侣里授权「修改系统设置」，之后亮度键改走 WiFi 直接改平板系统亮度。数字键盘 / 键盘 / 触控板的浮层都从屏幕底部弹出。\n\n"
+                        + "竖屏：键盘页上半部分是触控区、下半部分是贴底的键盘（按键大小和普通手机键盘接近）；中间的分隔条可以上下拖动调整两区比例（拖到 48% / 58% / 62% 附近会吸附，双击分隔条恢复默认 58/42）。触控板页和媒体页的功能区也贴着屏幕底部，顶部分隔条可以拖动调整功能区高度（上方留空方便拇指操作，双击分隔条恢复默认：触控板页 80% / 媒体页 78%）；媒体页顶部还有「触控板」键，可以直接弹出触控板浮层；媒体条下面还有 4 个药丸：「亮度 − / 亮度 ＋」（调屏幕亮度）、「−10s / ＋10s」（快退/快进 10 秒），横屏时它们会变成左右各竖排两枚。亮度键走蓝牙 HID 的 Consumer 用法（usage），部分平板（iQOO / vivo）会直接忽略这个 usage，App 这边绕不过去。数字键盘 / 键盘 / 触控板的浮层都从屏幕底部弹出。\n\n"
                         + "横屏会自动切换紧凑工具栏和全屏显示。顶部最右侧的「旋转」键可以随时手动切换横竖屏（切过去后会一直保持，直到再点一次；长按「旋转」恢复跟随系统自动旋转）；同一栏最左边的电源键要按住 0.6 秒才发送，避免误触。\n\n"
-                        + "界面大小：「自动」会按屏幕宽度和系统字体大小自动适配，换手机或平板不用重新设置；如果按钮文字被截断或界面太挤，可以点下面的「界面大小」选「小」或「标准」。顶部一栏放不下时，右侧会出现「更多」按钮，单手 / 右手 / 互换 / 旋转 / 伴侣 / 帮助会按屏幕宽度自动收进菜单。\n\n"
-                        + "中文输入：蓝牙键盘只能发送字母和按键，中文需要平板自己的输入法；需要直接打中文时请等后续的 WiFi 配套应用。\n\n"
+                        + "界面大小：「自动」会按屏幕宽度和系统字体大小自动适配，换手机或平板不用重新设置；如果按钮文字被截断或界面太挤，可以点下面的「界面大小」选「小」或「标准」。顶部一栏放不下时，右侧会出现「更多」按钮，单手 / 右手 / 互换 / 旋转 / 帮助会按屏幕宽度自动收进菜单。\n\n"
+                        + "中文输入：蓝牙键盘只能发送字母和按键，中文请用平板自己的输入法（手机这边专注当键盘、触控板和手柄）。\n\n"
                         + "配对：点右上角「配对」让手机可被发现，然后在平板上搜索并配对。\n\n"
                         + "如果平板上所有按键都突然没反应（App 更新后常见）：平板会缓存旧的蓝牙 HID 描述。请到平板 设置 → 蓝牙，找到本机设备 → 点右侧详情 →「取消配对 / 忘记设备」，然后回到 App 点「配对」重新配一次，之后所有功能恢复。")
                 .setPositiveButton("知道了", null)
-                .setNeutralButton("界面大小", (dialog, which) -> showUiSizeDialog())
+                .setNeutralButton("更多设置", (dialog, which) -> showMoreSettingsDialog())
                 .show();
     }
 
@@ -1251,6 +1227,134 @@ public class MainActivity extends Activity {
                     recreate();
                 })
                 .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /** Choice callback for the compact segmented rows inside 「更多设置」. */
+    private interface Choice {
+        void onPick(int index);
+    }
+
+    private void showMoreSettingsDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int side = Ui.dpi(this, 18);
+        box.setPadding(side, Ui.dpi(this, 6), side, 0);
+
+        addSettingsLabel(box, "指针点击方式");
+        addSettingsChoice(box, new String[]{"抬手点击（默认）", "按下即点"},
+                PointerSettings.clickDown() ? 1 : 0,
+                index -> PointerSettings.setClickDown(this, index == 1));
+
+        addSettingsLabel(box, "长按拖拽阈值");
+        final int[] pressValues = {250, 350, 450};
+        int pressIndex = 1;
+        for (int i = 0; i < pressValues.length; i++) {
+            if (pressValues[i] == PointerSettings.longPressMs()) pressIndex = i;
+        }
+        addSettingsChoice(box, new String[]{"250 ms", "350 ms（默认）", "450 ms"}, pressIndex,
+                index -> PointerSettings.setLongPressMs(this, pressValues[index]));
+
+        addSettingsLabel(box, "媒体页 ±10s 键发什么");
+        addSettingsChoice(box, new String[]{"上一段 / 下一段", "← / → 方向键"},
+                PointerSettings.mediaSkipArrow() ? 1 : 0,
+                index -> PointerSettings.setMediaSkipArrow(this, index == 1));
+
+        addSettingsLabel(box, "手柄 LT / RT 兼容（同时发 L1 / R1）");
+        addSettingsChoice(box, new String[]{"关（默认）", "开（老游戏只认 L1/R1）"},
+                PointerSettings.ltCompat() ? 1 : 0,
+                index -> PointerSettings.setLtCompat(this, index == 1));
+
+        addSettingsLabel(box, "极速模式（少震动 / 移动中不重绘）");
+        addSettingsChoice(box, new String[]{"关", "开（更跟手，默认）"},
+                PointerSettings.fast() ? 1 : 0,
+                index -> PointerSettings.setFast(this, index == 1));
+
+        addSettingsLabel(box, "其他");
+        addSettingsChoice(box, new String[]{"界面大小…", "指针延迟测量"}, -1, index -> {
+            if (index == 0) {
+                showUiSizeDialog();
+            } else {
+                showPointerLatency();
+            }
+        });
+
+        android.widget.ScrollView scroll = new android.widget.ScrollView(this);
+        scroll.addView(box);
+        new AlertDialog.Builder(this)
+                .setTitle("更多设置")
+                .setView(scroll)
+                .setPositiveButton("关闭", null)
+                .show();
+    }
+
+    private void addSettingsLabel(LinearLayout box, String text) {
+        TextView label = new TextView(this);
+        label.setText(text);
+        label.setTextSize(13);
+        label.setTextColor(Ui.TEXT_DIM);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = Ui.dpi(this, 14);
+        lp.bottomMargin = Ui.dpi(this, 6);
+        box.addView(label, lp);
+    }
+
+    private void addSettingsChoice(LinearLayout box, String[] options, int selected, Choice action) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        final TextView[] buttons = new TextView[options.length];
+        for (int i = 0; i < options.length; i++) {
+            TextView button = new TextView(this);
+            button.setText(options[i]);
+            button.setGravity(Gravity.CENTER);
+            button.setTextSize(12);
+            button.setSingleLine(true);
+            Ui.autoSize(button, 12, 9);
+            styleSettingsChoice(button, i == selected);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
+                    Ui.dpi(this, 38), 1f);
+            lp.rightMargin = i == options.length - 1 ? 0 : Ui.dpi(this, 6);
+            row.addView(button, lp);
+            buttons[i] = button;
+        }
+        row.setPadding(0, 0, 0, Ui.dpi(this, 2));
+        box.addView(row, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        for (int i = 0; i < buttons.length; i++) {
+            final int index = i;
+            buttons[i].setOnClickListener(v -> {
+                for (int j = 0; j < buttons.length; j++) {
+                    styleSettingsChoice(buttons[j], j == index);
+                }
+                action.onPick(index);
+            });
+        }
+    }
+
+    private void styleSettingsChoice(TextView button, boolean selected) {
+        android.graphics.drawable.GradientDrawable shape = new android.graphics.drawable.GradientDrawable();
+        shape.setCornerRadius(Ui.dp(this, 10));
+        shape.setColor(Ui.SURFACE_2);
+        if (selected) {
+            shape.setStroke(Ui.dpi(this, 1), Ui.ACCENT);
+        }
+        button.setBackground(shape);
+        button.setTextColor(selected ? Ui.ACCENT : Ui.TEXT);
+    }
+
+    /** Prints the pointer p50/p95 measured on the phone side (last 128 moves). */
+    private void showPointerLatency() {
+        String summary = HidManager.takePointerLatencySummary();
+        if (summary == null) {
+            toast("还没有指针数据：先去触控板滑几下再点这里");
+            return;
+        }
+        android.util.Log.i("PhoneKB-Latency", summary);
+        new AlertDialog.Builder(this)
+                .setTitle("指针延迟")
+                .setMessage(summary + "\n\nage = 手指动作到这一包报告发出的时间\ncost = 这一包报告本身的发送耗时")
+                .setPositiveButton("知道了", null)
                 .show();
     }
 
@@ -1364,15 +1468,22 @@ public class MainActivity extends Activity {
         if (intent.hasExtra("pair_dialog")) showPairingDialog();
         if (intent.hasExtra("help")) showHelpDialog();
         if (intent.getIntExtra("uisizedlg", 0) == 1) contentFrame.post(this::showUiSizeDialog);
-        // Debug/test hook: set the pairing token and/or open the WiFi companion page.
-        if (intent.hasExtra("ctoken")) {
-            String token = intent.getStringExtra("ctoken");
-            if (token != null && !token.isEmpty()) {
-                CompanionBridge.get(this).setToken(token);
-                CompanionBridge.get(this).start();
-            }
+        if (intent.getIntExtra("ptrlat", 0) == 1) contentFrame.post(this::showPointerLatency);
+        if (intent.getIntExtra("moredlg", 0) == 1) contentFrame.post(this::showMoreSettingsDialog);
+        // Debug/test hook: fire the new media keys once so the tablet can log them via getevent.
+        // 1 = tap every new key, 2 = hold the 2x key (mouse left down/up), 3 = hold rewind/fast-forward.
+        int mediaTest = intent.getIntExtra("mediatest", 0);
+        if (mediaTest == 1 && hid != null) {
+            contentFrame.postDelayed(() -> hid.tapConsumer(HidConstants.CONSUMER_PREV_TRACK), 500);
+            contentFrame.postDelayed(() -> hid.tapConsumer(HidConstants.CONSUMER_PLAY_PAUSE), 1000);
+            contentFrame.postDelayed(() -> hid.tapConsumer(HidConstants.CONSUMER_NEXT_TRACK), 1500);
+        } else if (mediaTest == 2 && hid != null) {
+            contentFrame.postDelayed(() -> hid.tapKey(0, HidConstants.KEY_SYSRQ), 800);
+            contentFrame.postDelayed(() -> hid.tapKey(HidConstants.MOD_LEFT_ALT, HidConstants.KEY_TAB), 2000);
+        } else if (mediaTest == 3 && hid != null) {
+            contentFrame.postDelayed(() -> hid.tapConsumer(HidConstants.CONSUMER_BRIGHTNESS_DECREMENT), 800);
+            contentFrame.postDelayed(() -> hid.tapConsumer(HidConstants.CONSUMER_BRIGHTNESS_INCREMENT), 1600);
         }
-        if (intent.hasExtra("companion")) contentFrame.post(this::openCompanion);
         // Debug/test hook: open the adaptive-toolbar overflow menu so it can be screenshotted.
         if (intent.getIntExtra("moremenu", 0) == 1) {
             // The decor view survives recreation, so the callback survives an orientation change.
@@ -1398,6 +1509,9 @@ public class MainActivity extends Activity {
         if (gamepadView != null && intent.hasExtra("gpcompat")) {
             gamepadView.setHatCompat(intent.getIntExtra("gpcompat", 0) == 1);
         }
+        if (gamepadView != null && intent.hasExtra("gpstickhat")) {
+            gamepadView.setPadStickHatCompat(intent.getIntExtra("gpstickhat", 0) == 1);
+        }
         if (gamepadView != null && intent.hasExtra("gptouch")) {
             gamepadView.setTouchMode(intent.getIntExtra("gptouch", 1));
         }
@@ -1409,6 +1523,18 @@ public class MainActivity extends Activity {
         }
         if (gamepadView != null && intent.hasExtra("gplayout")) {
             gamepadView.setLayoutMode(intent.getIntExtra("gplayout", 0));
+        }
+        if (gamepadView != null && intent.hasExtra("gpfast")) {
+            gamepadView.setFastMode(intent.getIntExtra("gpfast", 0) == 1);
+        }
+        if (gamepadView != null && intent.hasExtra("gphaptic")) {
+            gamepadView.setHaptics(intent.getIntExtra("gphaptic", 1) == 1);
+        }
+        if (gamepadView != null && intent.hasExtra("gpb")) {
+            gamepadView.setBigKeys(intent.getIntExtra("gpb", 0) == 1);
+        }
+        if (gamepadView != null && intent.hasExtra("gprz")) {
+            gamepadView.setStickAxisMode(intent.getIntExtra("gprz", 0));
         }
         // Debug/test hook: pointer sensitivity, so adb screenshots can cover every chip state.
         if (intent.hasExtra("sens")) {
@@ -1427,6 +1553,16 @@ public class MainActivity extends Activity {
         if (gamepadView != null && intent.getIntExtra("gpedit", 0) == 1) {
             contentFrame.postDelayed(() -> gamepadView.setEditing(true), 600);
         }
+        if (gamepadView != null && intent.getIntExtra("gpreset", 0) == 1) {
+            gamepadView.resetAllLayoutOffsets();
+        }
+        if (gamepadView != null && intent.getIntExtra("gplog", 0) == 1) {
+            gamepadView.setDebugLog(true);
+        }
+        if (gamepadView != null && intent.getIntExtra("gpsim", 0) > 0) {
+            final int scenario = intent.getIntExtra("gpsim", 0);
+            contentFrame.postDelayed(() -> gamepadView.debugSyntheticTouch(scenario), 900);
+        }
         if (gamepadView != null && intent.getIntExtra("gpdialog", 0) == 1) {
             contentFrame.postDelayed(gamepadView::showSettingsDialog, 700);
         }
@@ -1439,6 +1575,8 @@ public class MainActivity extends Activity {
         }
         // Debug/test hook: emit a fixed gamepad sequence so the host input events can be captured
         // with "adb shell getevent" (adb cannot tap the on-screen gamepad).
+        if (intent.getIntExtra("hidlog", 0) == 1) HidManager.setTimingLog(true);
+        if (intent.getIntExtra("hidlegacy", 0) == 1) HidManager.setLegacySend(true);
         int gpTest = intent.getIntExtra("gptest", 0);
         if (gpTest > 0) {
             new Thread(() -> runGamepadSelfTest(gpTest), "gamepad-self-test").start();
@@ -1456,16 +1594,6 @@ public class MainActivity extends Activity {
                     sleepQuietly(600);
                 }
             }, "brightness-self-test").start();
-        }
-        // Debug/test hook: drive the wireless (WiFi companion) brightness path directly, because
-        // adb cannot tap the on-screen brightness keys on the phone.
-        final int wifiBright = intent.getIntExtra("brightwifi", 0);
-        if (wifiBright != 0) {
-            contentFrame.postDelayed(() -> {
-                for (int i = 0; i < Math.abs(wifiBright); i++) {
-                    CompanionBridge.get(this).sendBright(wifiBright > 0);
-                }
-            }, 1500);
         }
     }
 
@@ -1503,7 +1631,84 @@ public class MainActivity extends Activity {
                 sleepQuietly(250);
             }
         }
+        if (mode == 6) {
+            // 30 taps, 120 ms apart: a human tap cadence. Host side must see all 30 press edges.
+            for (int i = 0; i < 30; i++) {
+                if (self.isInterrupted()) return;
+                manager.sendGamepad(HidConstants.GP_A);
+                sleepQuietly(26);
+                manager.sendGamepad(0);
+                sleepQuietly(94);
+            }
+        }
+        if (mode == 7) {
+            // 10 taps, 55 ms apart: faster than any host poll window - stress test for the queue.
+            for (int i = 0; i < 10; i++) {
+                if (self.isInterrupted()) return;
+                manager.sendGamepad(HidConstants.GP_A);
+                sleepQuietly(20);
+                manager.sendGamepad(0);
+                sleepQuietly(35);
+            }
+        }
+        if (mode == 9) {
+            // Every control once, with the full 4-axis report (both sticks) included.
+            int[] keys = {HidConstants.GP_A, HidConstants.GP_B, HidConstants.GP_X, HidConstants.GP_Y,
+                    HidConstants.GP_L1, HidConstants.GP_R1, HidConstants.GP_L2, HidConstants.GP_R2,
+                    HidConstants.GP_SELECT, HidConstants.GP_START,
+                    HidConstants.GP_UP, HidConstants.GP_DOWN, HidConstants.GP_LEFT, HidConstants.GP_RIGHT};
+            for (int k : keys) {
+                if (self.isInterrupted()) return;
+                manager.sendGamepadFull(k, 0x0F, 0, 0, 0, 0);
+                sleepQuietly(180);
+                manager.sendGamepadFull(0, 0x0F, 0, 0, 0, 0);
+                sleepQuietly(120);
+            }
+            // left stick sweep, then right stick sweep
+            for (int i = -3; i <= 3; i++) {
+                if (self.isInterrupted()) return;
+                manager.sendGamepadFull(0, 0x0F, i * 40, 0, 0, 0);
+                sleepQuietly(120);
+            }
+            for (int i = -3; i <= 3; i++) {
+                if (self.isInterrupted()) return;
+                manager.sendGamepadFull(0, 0x0F, 0, 0, i * 40, 0);
+                sleepQuietly(120);
+            }
+            for (int i = -3; i <= 3; i++) {
+                if (self.isInterrupted()) return;
+                manager.sendGamepadFull(0, 0x0F, 0, 0, 0, i * 40);
+                sleepQuietly(120);
+            }
+        }
+        if (mode == 10) {
+            // right stick only: does the host see ABS_RX / ABS_RY at all?
+            for (int i = 0; i < 5; i++) {
+                if (self.isInterrupted()) return;
+                manager.sendGamepadFull(0, 0x0F, 0, 0, 100, 0);
+                sleepQuietly(300);
+                manager.sendGamepadFull(0, 0x0F, 0, 0, -100, 0);
+                sleepQuietly(300);
+                manager.sendGamepadFull(0, 0x0F, 0, 0, 0, 100);
+                sleepQuietly(300);
+                manager.sendGamepadFull(0, 0x0F, 0, 0, 0, -100);
+                sleepQuietly(300);
+            }
+            manager.sendGamepadFull(0, 0x0F, 0, 0, 0, 0);
+        }
+        if (mode == 8) {
+            // Flood the queue exactly like an active joystick would, then press A. The press must
+            // not wait behind the backlog: legacy FIFO queued it, the coalescing sender does not.
+            for (int i = 0; i < 200; i++) {
+                manager.sendGamepadFull(0, 0x0F, (i % 200) - 100, 0, 0, 0);
+            }
+            manager.sendGamepad(HidConstants.GP_A);
+            sleepQuietly(120);
+            manager.sendGamepad(0);
+        }
         manager.sendGamepad(0);
+        Log.i("PhoneKB-GP", "self-test done mode=" + mode
+                + " drops=" + HidManager.takeDropCount() + " retries=" + HidManager.takeRetryCount());
     }
 
     private static void gamepadPulse(HidManager manager, int mask) {
@@ -1551,18 +1756,6 @@ public class MainActivity extends Activity {
     }
 
     // --------------------------------------------------------------- service
-
-    private void openCompanion() {
-        try {
-            // Forward our launch extras so debug/test hooks (e.g. pairjson) reach the
-            // companion page; CompanionActivity is not exported, so adb cannot start it.
-            Intent intent = new Intent(this, CompanionActivity.class);
-            if (getIntent() != null) intent.putExtras(getIntent());
-            startActivity(intent);
-        } catch (Exception e) {
-            toast("无法打开伴侣模式");
-        }
-    }
 
     private void startKeepAlive() {
         try {

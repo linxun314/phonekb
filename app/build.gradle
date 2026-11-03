@@ -10,8 +10,8 @@ android {
         applicationId 'com.phonekb'
         minSdk 28
         targetSdk 36
-        versionCode 20
-        versionName '0.15.0'
+        versionCode 58
+        versionName '0.36.1'
     }
 
     buildTypes {
@@ -31,7 +31,3 @@ android {
     }
 }
 
-// zxing-core is bundled purely to render the pairing QR code in the companion page.
-dependencies {
-    implementation files('libs/zxing-core-3.5.3.jar')
-}

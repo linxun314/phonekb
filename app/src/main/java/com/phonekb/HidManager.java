@@ -69,12 +69,102 @@ public final class HidManager {
      * to shave scheduling latency off each report.
      */
     private final ExecutorService sendExecutor = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "phonekb-hid-send");
+        Thread t = new Thread(() -> {
+            // Audio-class priority: a report hand-off should never wait behind background work.
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
+            r.run();
+        }, "phonekb-hid-send");
         t.setPriority(Thread.MAX_PRIORITY);
         return t;
     });
+
+    // ---- report coalescing (v0.26 latency work) -------------------------------------------
+    /**
+     * Only the newest payload per report id is kept. When the touch screen produces reports faster
+     * than Bluetooth can drain them, older states are dropped instead of being queued, so a button
+     * press can never end up behind a backlog of stale joystick/touchpad frames.
+     */
+    private final Object pendingLock = new Object();
+    private final java.util.HashMap<Integer, byte[]> pendingReports = new java.util.HashMap<>();
+    private boolean flushQueued;
+    private long lastGamepadSentAt;
+    private int lastGamepadButtons = -1;
+    private int lastGamepadHat = -1;
+    /** Hosts poll the HID channel at ~125 Hz; sending faster only burns the Bluetooth queue. */
+    private static final long MIN_GAMEPAD_GAP_MS = 4;
+    /** Debug switch: logs submit/sent timestamps so a host getevent run can be time-aligned. */
+    private static volatile boolean timingLog;
+    private static volatile int dropCount;
+    private static volatile int retryCount;
+
+    public static void setTimingLog(boolean on) {
+        timingLog = on;
+    }
+
+    /** A/B switch: true restores the pre-0.26 fire-and-forget sender (used to measure the gain). */
+    private static volatile boolean legacySend;
+
+    public static void setLegacySend(boolean on) {
+        legacySend = on;
+    }
+
+    public static int takeDropCount() {
+        int n = dropCount;
+        dropCount = 0;
+        return n;
+    }
+
+    public static int takeRetryCount() {
+        int n = retryCount;
+        retryCount = 0;
+        return n;
+    }
+    // ---- pointer latency statistics (v0.32): submit timestamp -> sendReport return --------------
+    private static final int STAT_N = 128;
+    private static final long[] statSample = new long[STAT_N];
+    private static final int[] statCost = new int[STAT_N];
+    private static int statCount;
+    private static int statCursor;
+
+    /** Records one pointer report: how long it took from the touch event to reaching Bluetooth. */
+    private static void recordPointerLatency(long eventTimeMs, int costMs) {
+        long age = SystemClock.uptimeMillis() - eventTimeMs;
+        if (age < 0) age = 0;
+        synchronized (statSample) {
+            statSample[statCursor] = age;
+            statCost[statCursor] = costMs;
+            statCursor = (statCursor + 1) % STAT_N;
+            if (statCount < STAT_N) statCount++;
+        }
+    }
+
+    /** "p50/p95 age, p50/p95 send cost" - or null when nothing was measured yet. */
+    public static String takePointerLatencySummary() {
+        long[] age;
+        int[] cost;
+        int n;
+        synchronized (statSample) {
+            n = statCount;
+            age = new long[n];
+            cost = new int[n];
+            for (int i = 0; i < n; i++) {
+                age[i] = statSample[i];
+                cost[i] = statCost[i];
+            }
+            statCount = 0;
+            statCursor = 0;
+        }
+        if (n == 0) return null;
+        java.util.Arrays.sort(age);
+        java.util.Arrays.sort(cost);
+        return "n=" + n
+                + " age p50=" + age[n / 2] + "ms p95=" + age[Math.min(n - 1, (int) (n * 0.95))] + "ms"
+                + " cost p50=" + cost[n / 2] + "ms p95=" + cost[Math.min(n - 1, (int) (n * 0.95))] + "ms";
+    }
+
     private final AtomicInteger pendDx = new AtomicInteger();
     private final AtomicInteger pendDy = new AtomicInteger();
+    private volatile long pendEventTime;
     private final AtomicBoolean mouseFlushQueued = new AtomicBoolean(false);
     /**
      * The coalescing timer runs on its own thread. It used to be posted on the main looper, which
@@ -83,8 +173,8 @@ public final class HidManager {
      */
     private volatile Handler mouseHandler;
     private volatile long lastMouseFlushAt;
-    /** Mouse moves inside this window are merged into one report (≈250 Hz ceiling). */
-    private static final long MOUSE_FLUSH_MS = 4;
+    /** Mouse moves inside this window are merged into one report (≈500 Hz ceiling). */
+    private static final long MOUSE_FLUSH_MS = 2;
     private BluetoothAdapter adapter;
     private BluetoothHidDevice hid;
     private volatile BluetoothDevice host;
@@ -247,7 +337,8 @@ public final class HidManager {
         try {
             BluetoothHidDeviceAppSdpSettings sdp = new BluetoothHidDeviceAppSdpSettings(
                     "PhoneKB", "Phone as Bluetooth keyboard", "PhoneKB",
-                    (byte) 0, HidConstants.REPORT_DESCRIPTOR);
+                    (byte) 0, stickAxisRz ? HidConstants.REPORT_DESCRIPTOR_RZ
+                            : HidConstants.REPORT_DESCRIPTOR);
             final int generation = ++registerGeneration;
             boolean ok = hid.registerApp(sdp, null, null, btExecutor, callback);
             Log.i(TAG, "registerApp ok=" + ok);
@@ -345,19 +436,124 @@ public final class HidManager {
             }
             return false;
         }
-        sendExecutor.execute(() -> {
-            try {
-                h.sendReport(d, reportId, data);
-            } catch (Exception e) {
-                Log.w(TAG, "sendReport failed", e);
+        final long submitAt = System.currentTimeMillis();
+        if (legacySend) {
+            if (timingLog) {
+                Log.i("PhoneKB-HID", "submit id=" + reportId + " t=" + submitAt + " mask=" + maskOf(data));
             }
-        });
+            sendExecutor.execute(() -> {
+                boolean ok = false;
+                try {
+                    ok = h.sendReport(d, reportId, data);
+                } catch (Exception e) {
+                    Log.w(TAG, "sendReport failed", e);
+                }
+                if (!ok) dropCount++;
+                if (timingLog) {
+                    Log.i("PhoneKB-HID", "sent id=" + reportId + " t=" + System.currentTimeMillis()
+                            + " ok=" + ok + " mask=" + maskOf(data));
+                }
+            });
+            return true;
+        }
+        synchronized (pendingLock) {
+            pendingReports.put(reportId, data);
+            if (!flushQueued) {
+                flushQueued = true;
+                sendExecutor.execute(this::flushPending);
+            }
+        }
+        if (timingLog) {
+            Log.i("PhoneKB-HID", "submit id=" + reportId + " t=" + submitAt + " mask=" + maskOf(data));
+        }
         long now = SystemClock.uptimeMillis();
         if (DEBUG && now - lastSendLogAt > 1000) {
             lastSendLogAt = now;
             Log.i(TAG, "send id=" + reportId + " len=" + data.length + " host=" + nameOf(d));
         }
         return true;
+    }
+
+    /**
+     * Drains {@link #pendingReports}, newest state first, retrying a failed hand-off a few times.
+     * A dropped report used to mean a lost button press; retrying (and letting a newer state replace
+     * an older one) keeps taps reliable without piling up a queue.
+     */
+    private void flushPending() {
+        BluetoothDevice d = host;
+        BluetoothHidDevice h = hid;
+        while (true) {
+            int reportId;
+            byte[] data;
+            synchronized (pendingLock) {
+                if (pendingReports.isEmpty()) {
+                    flushQueued = false;
+                    return;
+                }
+                if (pendingReports.containsKey(HidConstants.REPORT_GAMEPAD)) {
+                    reportId = HidConstants.REPORT_GAMEPAD;
+                } else {
+                    reportId = pendingReports.keySet().iterator().next();
+                }
+                data = pendingReports.remove(reportId);
+            }
+            if (reportId == HidConstants.REPORT_GAMEPAD) {
+                // Button/hat edges go out immediately; only pure stick movement is rate limited,
+                // otherwise a press could wait up to a few ms behind stick frames.
+                int buttons = data.length > 2 ? (data[1] & 0xFF) | ((data[2] & 0xFF) << 8) : 0;
+                int hat = data.length > 0 ? (data[0] & 0x0F) : 0x0F;
+                boolean edge = buttons != lastGamepadButtons || hat != lastGamepadHat;
+                if (!edge) {
+                    long wait = MIN_GAMEPAD_GAP_MS - (SystemClock.uptimeMillis() - lastGamepadSentAt);
+                    if (wait > 0) sleepQuietly(wait);
+                }
+                lastGamepadButtons = buttons;
+                lastGamepadHat = hat;
+                lastGamepadSentAt = SystemClock.uptimeMillis();
+            }
+            if (d == null || h == null || state != STATE_CONNECTED) {
+                d = host;
+                h = hid;
+                if (d == null || h == null || state != STATE_CONNECTED) {
+                    dropCount++;
+                    synchronized (pendingLock) {
+                        flushQueued = false;
+                    }
+                    return;
+                }
+            }
+            boolean ok = false;
+            for (int attempt = 0; attempt < 3 && !ok; attempt++) {
+                try {
+                    ok = h.sendReport(d, reportId, data);
+                } catch (Exception e) {
+                    Log.w(TAG, "sendReport failed", e);
+                }
+                if (!ok) {
+                    retryCount++;
+                    sleepQuietly(3);
+                }
+            }
+            if (!ok) dropCount++;
+            if (timingLog) {
+                Log.i("PhoneKB-HID", "sent id=" + reportId + " t=" + System.currentTimeMillis()
+                        + " ok=" + ok + " mask=" + maskOf(data));
+            }
+        }
+    }
+
+    private static String maskOf(byte[] data) {
+        if (data == null || data.length < 3) return "-";
+        int mask = (data[1] & 0xFF) | ((data[2] & 0xFF) << 8);
+        return String.valueOf(mask);
+    }
+
+    private static void sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     // ---------------------------------------------------------------- keyboard
@@ -407,17 +603,26 @@ public final class HidManager {
      * report count below what the link can carry, so the newest position is what the host sees.
      */
     public void mouseMove(int dx, int dy) {
+        mouseMove(dx, dy, SystemClock.uptimeMillis());
+    }
+
+    /**
+     * Same as {@link #mouseMove(int, int)} but keeps the touch event timestamp so the latency
+     * statistics can report how old the motion already was when it reached the Bluetooth stack.
+     */
+    public void mouseMove(int dx, int dy, long eventTimeMs) {
         if (dx == 0 && dy == 0) return;
         final long now = SystemClock.uptimeMillis();
         if (now - lastMouseFlushAt >= MOUSE_FLUSH_MS) {
             // Leading edge: the first move of a burst goes out right away instead of waiting for the
             // merge window, so the pointer starts moving in the same frame the finger does.
             lastMouseFlushAt = now;
-            dispatchMouse(dx, dy);
+            dispatchMouse(dx, dy, eventTimeMs);
             return;
         }
         pendDx.addAndGet(dx);
         pendDy.addAndGet(dy);
+        pendEventTime = eventTimeMs;
         if (mouseFlushQueued.compareAndSet(false, true)) {
             mouseHandler().postDelayed(this::flushMouseMove, MOUSE_FLUSH_MS);
         }
@@ -443,16 +648,17 @@ public final class HidManager {
         final int dx0 = pendDx.getAndSet(0);
         final int dy0 = pendDy.getAndSet(0);
         if (dx0 == 0 && dy0 == 0) return;
-        dispatchMouse(dx0, dy0);
+        dispatchMouse(dx0, dy0, pendEventTime);
     }
 
-    private void dispatchMouse(final int dx0, final int dy0) {
+    private void dispatchMouse(final int dx0, final int dy0, final long eventTimeMs) {
         final BluetoothDevice d = host;
         final BluetoothHidDevice h = hid;
         if (d == null || h == null || state != STATE_CONNECTED) return;
         sendExecutor.execute(() -> {
             int dx = dx0;
             int dy = dy0;
+            final long started = SystemClock.uptimeMillis();
             try {
                 while (dx != 0 || dy != 0) {
                     int sx = clamp(dx);
@@ -464,6 +670,7 @@ public final class HidManager {
                     dx -= sx;
                     dy -= sy;
                 }
+                recordPointerLatency(eventTimeMs, (int) (SystemClock.uptimeMillis() - started));
             } catch (Exception e) {
                 Log.w(TAG, "mouse flush failed", e);
             }
@@ -480,11 +687,80 @@ public final class HidManager {
         }
     }
 
+    /** Guards {@link #pointerHoldStart(int, int)} against being started twice from a double tap. */
+    private boolean pointerHeld;
+
+    /**
+     * Long-press gesture on the host screen (Douyin style "hold for 2x speed").
+     *
+     * <p>The pointer is first slammed into the top-left corner - the host clamps there, so the
+     * following relative move always starts from a known place - then stepped into the video area,
+     * and only then is the left button pressed. Everything runs inside one send task so the press
+     * can never overtake the moves.
+     */
+    public void pointerHoldStart(final int parkX, final int parkY) {
+        final BluetoothDevice d = host;
+        final BluetoothHidDevice h = hid;
+        if (d == null || h == null || state != STATE_CONNECTED) return;
+        if (pointerHeld) return;
+        pointerHeld = true;
+        sendExecutor.execute(() -> {
+            try {
+                sendMouseMove(h, d, -2400, -2400);
+                sleepQuietly(6);
+                sendMouseMove(h, d, parkX, parkY);
+                sleepQuietly(10);
+                byte[] r = new byte[4];
+                r[0] = 0x01;
+                h.sendReport(d, HidConstants.REPORT_MOUSE, r);
+            } catch (Exception e) {
+                pointerHeld = false;
+                Log.w(TAG, "pointer hold start failed", e);
+            }
+        });
+    }
+
+    /** Releases the left button pressed by {@link #pointerHoldStart(int, int)}. */
+    public void pointerHoldStop() {
+        if (!pointerHeld) return;
+        pointerHeld = false;
+        byte[] r = new byte[4];
+        send(HidConstants.REPORT_MOUSE, r);
+    }
+
+    /** Blocking chunked mouse move; only valid on the send thread. */
+    private void sendMouseMove(BluetoothHidDevice h, BluetoothDevice d, int dx, int dy)
+            throws Exception {
+        while (dx != 0 || dy != 0) {
+            int sx = clamp(dx);
+            int sy = clamp(dy);
+            byte[] r = new byte[4];
+            r[1] = (byte) sx;
+            r[2] = (byte) sy;
+            h.sendReport(d, HidConstants.REPORT_MOUSE, r);
+            dx -= sx;
+            dy -= sy;
+        }
+    }
+
     private static int clamp(int v) {
         return Math.max(-127, Math.min(127, v));
     }
 
     // -------------------------------------------------------- consumer control
+
+    /** Presses (and holds) one consumer control usage; release with {@link #consumerUp()}. */
+    public void consumerDown(int usage) {
+        byte[] r = new byte[2];
+        r[0] = (byte) (usage & 0xFF);
+        r[1] = (byte) ((usage >> 8) & 0xFF);
+        send(HidConstants.REPORT_CONSUMER, r);
+    }
+
+    /** Releases whatever consumer control usage is currently held. */
+    public void consumerUp() {
+        send(HidConstants.REPORT_CONSUMER, new byte[2]);
+    }
 
     public void tapConsumer(int usage) {
         byte[] r = new byte[2];
@@ -528,15 +804,24 @@ public final class HidManager {
         stickLy = clamp(ly);
         stickRx = clamp(rx);
         stickRy = clamp(ry);
-        byte[] r = new byte[7];
+        boolean rz = stickAxisRz;
+        byte[] r = new byte[rz ? 9 : 7];
         r[0] = (byte) (encodeHat(hat) & 0x0F);
         int mask = buttonMask(buttons);
         r[1] = (byte) (mask & 0xFF);
         r[2] = (byte) ((mask >> 8) & 0xFF);
         r[3] = (byte) stickLx;
         r[4] = (byte) stickLy;
-        r[5] = (byte) stickRx;
-        r[6] = (byte) stickRy;
+        if (rz) {
+            // Right stick only on Z / Rz for hosts that read the camera stick there.
+            r[5] = 0;
+            r[6] = 0;
+            r[7] = (byte) stickRx;
+            r[8] = (byte) stickRy;
+        } else {
+            r[5] = (byte) stickRx;
+            r[6] = (byte) stickRy;
+        }
         send(HidConstants.REPORT_GAMEPAD, r);
     }
 
@@ -567,6 +852,23 @@ public final class HidManager {
     /** Latest stick positions, so a button press never recentres a held stick. */
     private volatile int stickLx, stickLy, stickRx, stickRy;
 
+    /**
+     * True when the right stick should travel on Z / Rz instead of Rx / Ry. Changing this swaps the
+     * report descriptor, so the host has to forget the device and pair again.
+     */
+    private volatile boolean stickAxisRz;
+
+    public void setStickAxisRz(boolean enabled) {
+        if (stickAxisRz == enabled) return;
+        stickAxisRz = enabled;
+        // Re-register so the new descriptor is used for the next connection.
+        main.post(this::registerApp);
+    }
+
+    public boolean isStickAxisRz() {
+        return stickAxisRz;
+    }
+
     private static int buttonMask(int buttons) {
         int mask = 0;
         if ((buttons & HidConstants.GP_A) != 0) mask |= 0x0001;      // button 1  -> BTN_GAMEPAD (A)
@@ -584,7 +886,7 @@ public final class HidManager {
 
     /** Debug helper: sends a raw hat switch value (0-7, 0x0F = centred) with no buttons. */
     public void sendGamepadHat(int hat) {
-        byte[] r = new byte[7];
+        byte[] r = new byte[stickAxisRz ? 9 : 7];
         r[0] = (byte) hat;
         send(HidConstants.REPORT_GAMEPAD, r);
     }

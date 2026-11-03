@@ -4,6 +4,8 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
@@ -12,26 +14,39 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Media page tuned for one-handed / landscape use: a large media bar
- * (previous / play-pause / next) on top of two rows of four big keys
- * (volume up/down, mute, closed captions, then back/home/menu/power).
+ * Media page: a media card (previous / play-pause / next on top, -10s / +10s wide keys below)
+ * over a 2 x 5 grid of round function keys
+ * (volume+ volume- mute screenshot recents / brightness- brightness+ back home menu).
  *
- * The digit pad from the earlier Remote-style layout was dropped: the digits
- * already exist on the keyboard page, so the space now goes into bigger keys.
+ * The -10s / +10s keys send the same seek action as before (previous/next track, or the arrow
+ * keys, depending on the "media skip" preference) and repeat every {@link #LONG_REPEAT_MS} ms
+ * while held. Previous / next repeat too, so holding them scrubs through tracks.
+ *
+ * Rewind / fast-forward consumer usages were dropped: no player on the tablet maps them
+ * (getevent proved the reports arrive, Douyin and Bilibili just ignore them), while the
+ * prev/next seek step works everywhere.
  */
 public class MediaView extends View {
 
-    private static final int TYPE_CONSUMER = 1;
+    private static final int LONG_REPEAT_MS = 100;
+
+    private static final int KIND_CONSUMER = 0;
+    private static final int KIND_BRIGHT = 1;
+    private static final int KIND_SCREENSHOT = 2;
+    private static final int KIND_RECENTS = 3;
 
     private static final class Key {
         final RectF rect = new RectF();
         final int icon;
         final String label;
+        final int kind;
+        /** Consumer usage id, or +1 / -1 for the brightness pair. */
         final int code;
 
-        Key(int icon, String label, int code) {
+        Key(int icon, String label, int kind, int code) {
             this.icon = icon;
             this.label = label;
+            this.kind = kind;
             this.code = code;
         }
     }
@@ -42,19 +57,32 @@ public class MediaView extends View {
     private final Paint pressPaint = Ui.fill(Ui.KEY_PRESSED);
     private final Paint iconPaint = Ui.fill(Ui.TEXT);
     private final Paint iconDimPaint = Ui.fill(Ui.TEXT_DIM);
-    private final Paint barPaint = Ui.fill(Ui.SURFACE_2);
     private final Paint labelPaint;
     private final Paint labelDimPaint;
+    private final float labelSize;
 
     private final RectF mediaCard = new RectF();
     private final RectF keypadCard = new RectF();
-    private final RectF[] barAreas = {new RectF(), new RectF(), new RectF()};
+
+    /** Top row of the media card: previous / play-pause / next. */
+    private static final int BAR_COUNT = 3;
+    private static final int BAR_PREV = 0;
+    private static final int BAR_NEXT = 2;
+    private final RectF[] barAreas = new RectF[BAR_COUNT];
     private static final int[] BAR_ICONS = {Icons.PREV, Icons.PLAY_PAUSE, Icons.NEXT};
     private static final int[] BAR_USAGES = {
             HidConstants.CONSUMER_PREV_TRACK,
             HidConstants.CONSUMER_PLAY_PAUSE,
             HidConstants.CONSUMER_NEXT_TRACK};
 
+    /** Bottom row of the media card: -10s / +10s wide keys, repeat while held. */
+    private static final int PILL_COUNT = 2;
+    private static final int PILL_BACK = 0;
+    private static final int PILL_FORWARD = 1;
+    private final RectF[] pillAreas = new RectF[PILL_COUNT];
+    private final float pillRowHeight;
+
+    /** 2 rows x 5 round function keys. */
     private final Key[] keys;
     private final Map<Integer, Key> pressed = new HashMap<>();
 
@@ -62,17 +90,7 @@ public class MediaView extends View {
     private final float gap;
     private final float pad;
     private int pressedBar = -1;
-
-    private final RectF[] brightAreas = {new RectF(), new RectF()};
-    private static final int BRIGHT_DOWN = 0;
-    private static final int BRIGHT_UP = 1;
-    private static final int[] BRIGHT_USAGES = {
-            HidConstants.CONSUMER_BRIGHTNESS_DECREMENT,
-            HidConstants.CONSUMER_BRIGHTNESS_INCREMENT};
-    private final Paint sunPaint;
-    private final float brightRowHeight;
-    private boolean landscapeLayout;
-    private int pressedBright = -1;
+    private int pressedPill = -1;
 
     private final RectF toolpadRect = new RectF();
     private final Paint toolpadOutline;
@@ -82,12 +100,26 @@ public class MediaView extends View {
     private boolean pressedToolpad;
     private Runnable touchpadAction;
 
-    /** HID brightness usages are ignored by some OEM ROMs; the activity also drives the WiFi companion. */
+    /** HID brightness usages are ignored by some OEM ROMs; the host may handle them itself. */
     public interface BrightnessListener {
         void onBrightness(boolean up);
     }
 
     private BrightnessListener brightnessListener;
+
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Runnable repeatBar = new Runnable() {
+        @Override
+        public void run() {
+            if (pressedBar == BAR_PREV || pressedBar == BAR_NEXT) {
+                hid.tapConsumer(BAR_USAGES[pressedBar]);
+                handler.postDelayed(this, LONG_REPEAT_MS);
+            } else if (pressedPill == PILL_BACK || pressedPill == PILL_FORWARD) {
+                tapSkip(pressedPill == PILL_FORWARD);
+                handler.postDelayed(this, LONG_REPEAT_MS);
+            }
+        }
+    };
 
     public MediaView(Context context, HidManager hid) {
         super(context);
@@ -95,31 +127,35 @@ public class MediaView extends View {
         corner = Ui.dp(context, 24);
         gap = Ui.dp(context, 8);
         pad = Ui.dp(context, 10);
-        labelPaint = Ui.text(context, 24, Ui.TEXT);
-        labelDimPaint = Ui.text(context, 24, Ui.TEXT_DIM);
+        labelPaint = Ui.text(context, 22, Ui.TEXT);
+        labelDimPaint = Ui.text(context, 22, Ui.TEXT_DIM);
+        labelSize = Ui.text(context, 9.5f, Ui.TEXT_DIM).getTextSize();
         toolpadHeight = Ui.dp(context, 44);
-        brightRowHeight = Ui.dp(context, 40);
-        sunPaint = Ui.fill(Ui.TEXT);
+        pillRowHeight = Ui.dp(context, 44);
         toolpadOutline = new Paint(Paint.ANTI_ALIAS_FLAG);
         toolpadOutline.setStyle(Paint.Style.STROKE);
         toolpadOutline.setColor(Ui.ACCENT);
         toolpadOutline.setStrokeWidth(Ui.dp(context, 1.5f));
         toolpadText = Ui.text(context, 15, Ui.ACCENT);
         toolpadText.setTextAlign(Paint.Align.CENTER);
+        for (int i = 0; i < BAR_COUNT; i++) barAreas[i] = new RectF();
+        for (int i = 0; i < PILL_COUNT; i++) pillAreas[i] = new RectF();
 
         keys = new Key[]{
-                new Key(Icons.VOL_UP, null, HidConstants.CONSUMER_VOLUME_UP),
-                new Key(Icons.VOL_DOWN, null, HidConstants.CONSUMER_VOLUME_DOWN),
-                new Key(Icons.MUTE, null, HidConstants.CONSUMER_MUTE),
-                new Key(0, "CC", HidConstants.CONSUMER_CLOSED_CAPTION),
+                new Key(Icons.VOL_UP, "音量+", KIND_CONSUMER, HidConstants.CONSUMER_VOLUME_UP),
+                new Key(Icons.VOL_DOWN, "音量−", KIND_CONSUMER, HidConstants.CONSUMER_VOLUME_DOWN),
+                new Key(Icons.MUTE, "静音", KIND_CONSUMER, HidConstants.CONSUMER_MUTE),
+                new Key(Icons.SCREENSHOT, "截屏", KIND_SCREENSHOT, 0),
+                new Key(Icons.RECENTS, "多任务", KIND_RECENTS, 0),
 
-                new Key(Icons.BACK, null, HidConstants.CONSUMER_AC_BACK),
-                new Key(Icons.HOME, null, HidConstants.CONSUMER_AC_HOME),
-                new Key(Icons.MENU, null, HidConstants.CONSUMER_MENU),
-                new Key(Icons.POWER, null, HidConstants.CONSUMER_POWER)};
+                new Key(Icons.SUN_DOWN, "亮度−", KIND_BRIGHT, -1),
+                new Key(Icons.SUN_UP, "亮度+", KIND_BRIGHT, 1),
+                new Key(Icons.BACK, "返回", KIND_CONSUMER, HidConstants.CONSUMER_AC_BACK),
+                new Key(Icons.HOME, "主页", KIND_CONSUMER, HidConstants.CONSUMER_AC_HOME),
+                new Key(Icons.MENU, "菜单", KIND_CONSUMER, HidConstants.CONSUMER_MENU)};
     }
 
-    /** Portrait media page: a full-width 触控板 button above the media controls. */
+    /** Portrait media page: a full-width touchpad button above the media controls. */
     public void setToolpadRow(boolean show) {
         toolpadRow = show;
         invalidate();
@@ -148,63 +184,88 @@ public class MediaView extends View {
             contentTop = toolpadRect.bottom + gap;
         }
 
-        float mediaH = Math.max(Ui.dp(getContext(), 72), (bottom - contentTop) * 0.26f);
-        mediaH = Math.min(mediaH, Ui.dp(getContext(), 140));
-
-        // Brightness keys: landscape puts them left/right of the media bar (no extra row),
-        // portrait puts them on their own row under the media bar.
-        landscapeLayout = (right - left) > (bottom - top) * 1.2f;
-        float keysTop;
-        if (landscapeLayout) {
-            float bw = Math.min(Math.max(Ui.dp(getContext(), 88), (right - left) * 0.105f), (right - left) * 0.16f);
-            brightAreas[0].set(left, contentTop, left + bw, contentTop + mediaH);
-            brightAreas[1].set(right - bw, contentTop, right, contentTop + mediaH);
-            mediaCard.set(left + bw + gap, contentTop, right - bw - gap, contentTop + mediaH);
-            keysTop = mediaCard.bottom;
+        boolean landscape = (right - left) > (bottom - top) * 1.2f;
+        float cardTop;
+        if (landscape) {
+            // Side by side: media card on the left, function keys on the right.
+            float mediaW = (right - left) * 0.60f;
+            mediaCard.set(left, contentTop, left + mediaW, bottom);
+            keypadCard.set(left + mediaW + gap, contentTop, right, bottom);
+            cardTop = contentTop;
         } else {
+            float mediaH = pad * 2 + Ui.dp(getContext(), 62) + gap + pillRowHeight;
+            mediaH = Math.min(mediaH, (bottom - contentTop) * 0.46f);
             mediaCard.set(left, contentTop, right, contentTop + mediaH);
-            float rowTop = mediaCard.bottom + gap;
-            float half = (right - left - gap) / 2f;
-            brightAreas[0].set(left, rowTop, left + half, rowTop + brightRowHeight);
-            brightAreas[1].set(left + half + gap, rowTop, right, rowTop + brightRowHeight);
-            keysTop = brightAreas[0].bottom;
+            keypadCard.set(left, mediaCard.bottom + gap, right, bottom);
+            cardTop = mediaCard.top;
         }
 
-        float keypadTop = keysTop + gap;
-        keypadCard.set(left, keypadTop, right, bottom);
-
-        // media bar: three touch areas with 24 / 40 / 24 weights inside an inset card
+        // Media card: previous / play / next on top, -10s / +10s below.
         float inset = Ui.dp(getContext(), 10);
         float innerLeft = mediaCard.left + inset;
         float innerRight = mediaCard.right - inset;
         float innerTop = mediaCard.top + inset;
         float innerBottom = mediaCard.bottom - inset;
-        float unit = (innerRight - innerLeft) / 88f;
-        barAreas[0].set(innerLeft, innerTop, innerLeft + unit * 24f, innerBottom);
-        barAreas[1].set(barAreas[0].right, innerTop, barAreas[0].right + unit * 40f, innerBottom);
-        barAreas[2].set(barAreas[1].right, innerTop, barAreas[1].right + unit * 24f, innerBottom);
+        float innerH = innerBottom - innerTop;
+        if (innerH < 1f || innerRight <= innerLeft) return;
+        // Natural heights; landscape stretches them a little but never more than a thumb key.
+        float naturalRow1 = Ui.dp(getContext(), 56);
+        float naturalRow2 = Ui.dp(getContext(), 44);
+        float row1H;
+        float row2H;
+        float topOff = 0f;
+        float avail = innerH - gap;
+        if (avail >= naturalRow1 + naturalRow2) {
+            float extra = avail - naturalRow1 - naturalRow2;
+            row1H = naturalRow1 + (landscape ? Math.min(extra * 0.62f, Ui.dp(getContext(), 44)) : 0f);
+            row2H = naturalRow2 + (landscape ? Math.min(extra * 0.38f, Ui.dp(getContext(), 24)) : 0f);
+            topOff = Math.max(0f, (innerH - row1H - gap - row2H) / 2f);
+        } else {
+            row1H = Math.max(Ui.dp(getContext(), 40), avail * 0.56f);
+            row2H = Math.max(Ui.dp(getContext(), 30), avail - row1H);
+        }
+        float barTop = innerTop + topOff;
+        float cellW = (innerRight - innerLeft - gap * (BAR_COUNT - 1)) / (float) BAR_COUNT;
+        for (int i = 0; i < BAR_COUNT; i++) {
+            float l = innerLeft + i * (cellW + gap);
+            barAreas[i].set(l, barTop, l + cellW, barTop + row1H);
+        }
+        float pillW = (innerRight - innerLeft - gap) / (float) PILL_COUNT;
+        for (int i = 0; i < PILL_COUNT; i++) {
+            float l = innerLeft + i * (pillW + gap);
+            pillAreas[i].set(l, barTop + row1H + gap, l + pillW, barTop + row1H + gap + row2H);
+        }
 
-        // 2 rows x 4 large keys, centred in the keypad card
+        // Function keys: 2 rows x 5 equal cells.
         float gridPad = Ui.dp(getContext(), 8);
         float gridLeft = keypadCard.left + gridPad;
         float gridRight = keypadCard.right - gridPad;
         float gridTop = keypadCard.top + gridPad;
         float gridBottom = keypadCard.bottom - gridPad;
-        float cellW = (gridRight - gridLeft) / 4f;
-        float cellH = (gridBottom - gridTop) / 2f;
+        if (gridRight <= gridLeft || gridBottom <= gridTop) return;
+        float cw = (gridRight - gridLeft) / 5f;
+        float ch = (gridBottom - gridTop) / 2f;
         for (int i = 0; i < keys.length; i++) {
-            int row = i / 4;
-            int col = i % 4;
-            float l = gridLeft + col * cellW;
-            float t = gridTop + row * cellH;
-            keys[i].rect.set(l, t, l + cellW, t + cellH);
+            int row = i / 5;
+            int col = i % 5;
+            float l = gridLeft + col * cw;
+            float t = gridTop + row * ch;
+            keys[i].rect.set(l, t, l + cw, t + ch);
         }
+    }
+
+    private float keyRadius(Key key) {
+        float labelRoom = Ui.dp(getContext(), 15);
+        float byHeight = (key.rect.height() - labelRoom) * 0.5f;
+        float byWidth = key.rect.width() * 0.44f;
+        return Math.max(Ui.dp(getContext(), 14), Math.min(byHeight, byWidth));
     }
 
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
         canvas.drawColor(Ui.BG);
+
         if (toolpadRow) {
             float radius = Ui.dp(getContext(), 12);
             canvas.drawRoundRect(toolpadRect, radius, radius, pressedToolpad ? pressPaint : keyPaint);
@@ -218,98 +279,125 @@ public class MediaView extends View {
         canvas.drawRoundRect(keypadCard, corner, corner, cardPaint);
 
         Paint icon = hid.isConnected() ? iconPaint : iconDimPaint;
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < BAR_COUNT; i++) {
             RectF area = barAreas[i];
+            if (area.width() <= 0f) continue;
             if (i == pressedBar) {
                 RectF hit = new RectF(area);
                 hit.inset(Ui.dp(getContext(), 2), Ui.dp(getContext(), 2));
-                canvas.drawRoundRect(hit, Ui.dp(getContext(), 16), Ui.dp(getContext(), 16), barPaint);
+                canvas.drawRoundRect(hit, Ui.dp(getContext(), 16), Ui.dp(getContext(), 16), keyPaint);
             }
             RectF box = new RectF(area);
-            box.inset(area.width() * 0.3f, area.height() * 0.24f);
+            box.inset(area.width() * 0.26f, area.height() * 0.26f);
             Icons.draw(canvas, BAR_ICONS[i], box, icon);
         }
 
-        drawBrightness(canvas, brightAreas[BRIGHT_DOWN], false, pressedBright == BRIGHT_DOWN);
-        drawBrightness(canvas, brightAreas[BRIGHT_UP], true, pressedBright == BRIGHT_UP);
+        drawSkip(canvas, pillAreas[PILL_BACK], PILL_BACK);
+        drawSkip(canvas, pillAreas[PILL_FORWARD], PILL_FORWARD);
 
+        Paint label = hid.isConnected() ? labelDimPaint : iconDimPaint;
         for (Key key : keys) {
-            float radius = Math.min(key.rect.width(), key.rect.height()) * 0.46f;
+            float radius = keyRadius(key);
             float cx = key.rect.centerX();
-            float cy = key.rect.centerY();
+            float cy = key.rect.centerY() - Ui.dp(getContext(), 6);
             canvas.drawCircle(cx, cy, radius, pressed.containsValue(key) ? pressPaint : keyPaint);
-            if (key.icon != 0) {
-                RectF box = new RectF(cx - radius, cy - radius, cx + radius, cy + radius);
-                box.inset(radius * 0.40f, radius * 0.40f);
-                Icons.draw(canvas, key.icon, box, icon);
-            } else {
-                float textSize = radius * 0.9f;
-                Paint text = hid.isConnected() ? labelPaint : labelDimPaint;
-                text.setTextSize(textSize);
-                canvas.drawText(key.label, cx, cy - (text.ascent() + text.descent()) / 2f, text);
-            }
+            RectF box = new RectF(cx - radius, cy - radius, cx + radius, cy + radius);
+            box.inset(radius * 0.42f, radius * 0.42f);
+            Icons.draw(canvas, key.icon, box, icon);
+            label.setTextSize(labelSize);
+            label.setTextAlign(Paint.Align.CENTER);
+            canvas.drawText(key.label, cx, cy + radius + Ui.dp(getContext(), 11), label);
         }
     }
 
-    private void drawBrightness(Canvas canvas, RectF area, boolean up, boolean pressedState) {
+    /** -10s / +10s wide keys: seek glyph on the left, the step on the right. */
+    private void drawSkip(Canvas canvas, RectF area, int index) {
         if (area.width() <= 0f || area.height() <= 0f) return;
         float h = area.height();
-        float radius = Math.min(Ui.dp(getContext(), 16), h / 2f);
-        canvas.drawRoundRect(area, radius, radius, pressedState ? pressPaint : keyPaint);
+        float radius = Math.min(Ui.dp(getContext(), 16), Math.min(h, area.width()) / 2f);
+        canvas.drawRoundRect(area, radius, radius, index == pressedPill ? pressPaint : keyPaint);
         Paint icon = hid.isConnected() ? iconPaint : iconDimPaint;
-        boolean stacked = area.width() < Ui.dp(getContext(), 150);
-        float sunR = stacked ? h * 0.15f : h * 0.20f;
-        float sunX;
-        float sunY;
-        float textX;
-        float textY;
-        float textSize;
-        if (stacked) {
-            sunX = area.centerX();
-            sunY = area.top + h * 0.34f;
-            textX = area.centerX();
-            textY = area.top + h * 0.76f;
-            textSize = h * 0.24f;
-        } else {
-            sunX = area.left + h * 0.55f;
-            sunY = area.centerY();
-            textX = area.centerX() + h * 0.30f;
-            textY = area.centerY();
-            textSize = h * 0.32f;
-        }
-        drawSun(canvas, sunX, sunY, sunR, icon);
         Paint text = hid.isConnected() ? labelPaint : labelDimPaint;
-        text.setTextSize(textSize);
-        canvas.drawText(up ? "亮度 ＋" : "亮度 −", textX,
-                textY - (text.ascent() + text.descent()) / 2f, text);
+        float glyph = Math.min(Math.min(h * 0.30f, area.width() * 0.09f), Ui.dp(getContext(), 15f));
+        RectF box = new RectF(area.left + area.width() * 0.12f, area.centerY() - glyph,
+                area.left + area.width() * 0.12f + glyph * 2f, area.centerY() + glyph);
+        Icons.draw(canvas, index == PILL_BACK ? Icons.REWIND : Icons.FORWARD, box, icon);
+        boolean back = index == PILL_BACK;
+        text.setTextSize(Math.min(Math.min(h * 0.42f, area.width() * 0.22f), Ui.dp(getContext(), 22f)));
+        text.setTextAlign(Paint.Align.CENTER);
+        canvas.drawText(back ? "−10s" : "＋10s", area.left + area.width() * 0.60f,
+                area.centerY() - (text.ascent() + text.descent()) / 2f, text);
     }
 
-    private void drawSun(Canvas canvas, float cx, float cy, float r, Paint paint) {
-        float stroke = Math.max(Ui.dp(getContext(), 1.2f), r * 0.20f);
-        Paint ray = new Paint(paint);
-        ray.setStyle(Paint.Style.STROKE);
-        ray.setStrokeWidth(stroke);
-        ray.setStrokeCap(Paint.Cap.ROUND);
-        canvas.drawCircle(cx, cy, r * 0.62f, ray);
-        float outer = r * 1.28f;
-        for (int i = 0; i < 8; i++) {
-            double angle = Math.PI * i / 4.0;
-            float dx = (float) Math.cos(angle);
-            float dy = (float) Math.sin(angle);
-            canvas.drawLine(cx + dx * r * 0.92f, cy + dy * r * 0.92f,
-                    cx + dx * outer, cy + dy * outer, ray);
+    private void haptic() {
+        if (PointerSettings.fast()) return;
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+    }
+
+    private void tapBar(int index) {
+        hid.tapConsumer(BAR_USAGES[index]);
+    }
+
+    private void startBarRepeat(int bar) {
+        pressedBar = bar;
+        handler.removeCallbacks(repeatBar);
+        if (bar == BAR_PREV || bar == BAR_NEXT) handler.postDelayed(repeatBar, 320);
+    }
+
+    private void stopBarRepeat() {
+        handler.removeCallbacks(repeatBar);
+        pressedBar = -1;
+        pressedPill = -1;
+    }
+
+    /** -10s / +10s: either player seek step (prev/next track usages) or the arrow keys. */
+    private void tapSkip(boolean forward) {
+        if (PointerSettings.mediaSkipArrow()) {
+            hid.tapKey(0, forward ? HidConstants.KEY_RIGHT : HidConstants.KEY_LEFT);
+        } else {
+            hid.tapConsumer(forward ? HidConstants.CONSUMER_NEXT_TRACK : HidConstants.CONSUMER_PREV_TRACK);
         }
+    }
+
+    private void activate(Key key) {
+        switch (key.kind) {
+            case KIND_BRIGHT: {
+                boolean up = key.code > 0;
+                hid.tapConsumer(up ? HidConstants.CONSUMER_BRIGHTNESS_INCREMENT
+                        : HidConstants.CONSUMER_BRIGHTNESS_DECREMENT);
+                if (brightnessListener != null) brightnessListener.onBrightness(up);
+                break;
+            }
+            case KIND_SCREENSHOT:
+                hid.tapKey(0, HidConstants.KEY_SYSRQ);
+                break;
+            case KIND_RECENTS:
+                // No HID usage maps to the recents key, so use the Android keyboard shortcut.
+                hid.tapKey(HidConstants.MOD_LEFT_ALT, HidConstants.KEY_TAB);
+                break;
+            default:
+                hid.tapConsumer(key.code);
+                break;
+        }
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        // Never leave a key pressed when the page goes away.
+        stopBarRepeat();
+        super.onDetachedFromWindow();
     }
 
     private Key find(float x, float y) {
         for (Key key : keys) {
-            if (key.rect.contains(x, y)) return key;
+            float radius = keyRadius(key);
+            float cx = key.rect.centerX();
+            float cy = key.rect.centerY() - Ui.dp(getContext(), 6);
+            float dx = x - cx;
+            float dy = y - cy;
+            if (dx * dx + dy * dy <= radius * radius * 1.12f) return key;
         }
         return null;
-    }
-
-    private void activate(Key key) {
-        hid.tapConsumer(key.code);
     }
 
     @Override
@@ -325,23 +413,21 @@ public class MediaView extends View {
                     invalidate();
                     return true;
                 }
-                for (int i = 0; i < 2; i++) {
-                    if (brightAreas[i].contains(x, y)) {
-                        pressedBright = i;
-                        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
-                        hid.tapConsumer(BRIGHT_USAGES[i]);
-                        if (brightnessListener != null) {
-                            brightnessListener.onBrightness(i == BRIGHT_UP);
-                        }
-                        invalidate();
-                        return true;
-                    }
+                for (int i = 0; i < PILL_COUNT; i++) {
+                    if (!pillAreas[i].contains(x, y)) continue;
+                    pressedPill = i;
+                    haptic();
+                    tapSkip(i == PILL_FORWARD);
+                    handler.removeCallbacks(repeatBar);
+                    handler.postDelayed(repeatBar, 380);
+                    invalidate();
+                    return true;
                 }
-                for (int i = 0; i < 3; i++) {
+                for (int i = 0; i < BAR_COUNT; i++) {
                     if (barAreas[i].contains(x, y)) {
-                        pressedBar = i;
-                        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
-                        hid.tapConsumer(BAR_USAGES[i]);
+                        haptic();
+                        tapBar(i);
+                        startBarRepeat(i);
                         invalidate();
                         return true;
                     }
@@ -349,7 +435,7 @@ public class MediaView extends View {
                 Key key = find(x, y);
                 if (key == null) return true;
                 pressed.put(e.getPointerId(0), key);
-                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                haptic();
                 activate(key);
                 invalidate();
                 return true;
@@ -359,7 +445,7 @@ public class MediaView extends View {
                 Key key = find(e.getX(index), e.getY(index));
                 if (key != null) {
                     pressed.put(e.getPointerId(index), key);
-                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                    haptic();
                     activate(key);
                     invalidate();
                 }
@@ -367,8 +453,7 @@ public class MediaView extends View {
             }
             case MotionEvent.ACTION_UP: {
                 pressed.remove(e.getPointerId(e.getActionIndex()));
-                pressedBar = -1;
-                pressedBright = -1;
+                stopBarRepeat();
                 pressedToolpad = false;
                 invalidate();
                 return true;
@@ -380,8 +465,7 @@ public class MediaView extends View {
             }
             case MotionEvent.ACTION_CANCEL: {
                 pressed.clear();
-                pressedBar = -1;
-                pressedBright = -1;
+                stopBarRepeat();
                 pressedToolpad = false;
                 invalidate();
                 return true;

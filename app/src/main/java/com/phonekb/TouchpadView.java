@@ -76,6 +76,7 @@ public class TouchpadView extends View {
     private int maxPointers;
     private boolean moved;
     private boolean scrolled;
+    private boolean pressedDown;
 
     public TouchpadView(Context context, HidManager hid) {
         super(context);
@@ -86,6 +87,12 @@ public class TouchpadView extends View {
         iconPaint = Ui.fill(Ui.TEXT);
         iconDimPaint = Ui.fill(Ui.TEXT_DIM);
         labelPaint = Ui.text(context, 13, Ui.TEXT_DIM);
+    }
+
+    /** Fast mode trades the tick for a couple of frames of latency. */
+    private void haptic() {
+        if (PointerSettings.fast()) return;
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
     }
 
     @Override
@@ -167,7 +174,7 @@ public class TouchpadView extends View {
     private void startScroll(int dir) {
         mode = MODE_SCROLL;
         scrollDir = dir;
-        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+        haptic();
         hid.mouseWheel(dir);
         handler.postDelayed(scrollRepeat, 220);
         invalidate();
@@ -176,13 +183,14 @@ public class TouchpadView extends View {
     private void startMouse(int button) {
         mode = MODE_MOUSE;
         pressedMouse = button;
-        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+        haptic();
         hid.mouseButtons(button);
         invalidate();
     }
 
     private void releaseAll() {
-        if (mode == MODE_MOUSE) hid.mouseButtons(0);
+        if (mode == MODE_MOUSE || pressedDown) hid.mouseButtons(0);
+        pressedDown = false;
         handler.removeCallbacks(scrollRepeat);
         mode = MODE_NONE;
         scrollDir = 0;
@@ -220,6 +228,11 @@ public class TouchpadView extends View {
                     maxPointers = 1;
                     moved = false;
                     scrolled = false;
+                    pressedDown = false;
+                    if (PointerSettings.clickDown()) {
+                        hid.mouseButtons(MOUSE_LEFT);
+                        pressedDown = true;
+                    }
                 }
                 return true;
             }
@@ -261,7 +274,7 @@ public class TouchpadView extends View {
                     int dx = (int) accumX;
                     int dy = (int) accumY;
                     if (dx != 0 || dy != 0) {
-                        hid.mouseMove(dx, dy);
+                        hid.mouseMove(dx, dy, e.getEventTime());
                         accumX -= dx;
                         accumY -= dy;
                     }
@@ -314,9 +327,12 @@ public class TouchpadView extends View {
                     scrollDir = 0;
                 } else if (mode == MODE_PAD) {
                     long duration = System.currentTimeMillis() - downTime;
-                    if (!scrolled && !moved && duration < TAP_MAX_MS
+                    if (pressedDown) {
+                        // Press already sent the click; release just lets the button go.
+                        hid.mouseButtons(0);
+                    } else if (!scrolled && !moved && duration < TAP_MAX_MS
                             && maxPointers >= 1 && maxPointers <= 3) {
-                        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                        haptic();
                         if (maxPointers == 1) {
                             hid.mouseClick(MOUSE_LEFT);
                         } else if (maxPointers == 2) {
@@ -327,6 +343,7 @@ public class TouchpadView extends View {
                     }
                     mode = MODE_NONE;
                 }
+                pressedDown = false;
                 invalidate();
                 return true;
             }
