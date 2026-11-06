@@ -3,6 +3,7 @@ package com.phonekb;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.Dialog;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.content.Intent;
@@ -11,11 +12,17 @@ import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.text.TextUtils;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Gravity;
+import android.view.Menu;
 import android.view.MotionEvent;
+import android.view.Window;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
@@ -23,6 +30,7 @@ import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.PopupMenu;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -62,13 +70,19 @@ public class MainActivity extends Activity {
     private TextView statusDetail;
     private TextView pairButton;
     private final TextView[] tabs = new TextView[TAB_NAMES.length];
-    private TextView oneHandPill;
-    private TextView handPill;
+    private View oneHandPill;
+    private View handPill;
     private TextView footer;
     private PowerButtonView powerButton;
+    private LinearLayout devicePill;
+    private IconView devicePillIcon;
     private TextView rotateButton;
     private TextView swapPill;
+    private LinearLayout modePill;
+    private TextView modeLabel;
     private boolean twoHandSwapped;
+    /** 平板模式 = Android tablet; 电脑模式 = Windows PC. Same Bluetooth HID link either way. */
+    private boolean pcMode;
 
     private final View[] pages = new View[TAB_NAMES.length];
     private KeyboardView keyboardView;
@@ -126,7 +140,11 @@ public class MainActivity extends Activity {
     private final Runnable retryIfError = new Runnable() {
         @Override
         public void run() {
-            if (hid != null && hid.getState() == HidManager.STATE_ERROR) hid.start();
+            if (hid == null) return;
+            // Tap the status text to retry: a hard error restarts the profile, anything that is
+            // not connected just re-attempts the last host (and resets the reconnect backoff).
+            if (hid.getState() == HidManager.STATE_ERROR) hid.start();
+            else if (!hid.isConnected()) hid.retryConnect();
         }
     };
 
@@ -160,12 +178,18 @@ public class MainActivity extends Activity {
         getWindow().setNavigationBarColor(Ui.BG);
         prefs = getSharedPreferences("phonekb", MODE_PRIVATE);
         rightHanded = prefs.getBoolean("right_handed", true);
-        oneHandMode = prefs.getBoolean("one_hand", false);
+        // 单手 page removed in v0.37.6; a leftover true pref would hide every tab with no way back.
+        oneHandMode = false;
+        if (prefs.getBoolean("one_hand", false)) prefs.edit().putBoolean("one_hand", false).apply();
         twoHandSwapped = prefs.getBoolean("twohand_swapped", false);
         currentTab = Math.max(0, Math.min(TAB_NAMES.length - 1, prefs.getInt("last_tab", TAB_KEYBOARD)));
         landscape = getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
         kbSplit = Math.max(SPLIT_MIN, Math.min(SPLIT_MAX,
                 prefs.getFloat("kb_split", SPLIT_DEFAULT)));
+        pcMode = prefs.getInt("device_mode", 0) == 1;
+        GamepadView.setNeutralHat(prefs.getInt("gp_null_hat", 0x0F));
+        PointerSettings.init(this);
+        HidManager.mouseGapMs = PointerSettings.reportMs();
 
         hid = HidManager.get(this);
         hid.setListener(hidListener);
@@ -224,6 +248,9 @@ public class MainActivity extends Activity {
     protected void onPause() {
         // A floating overflow menu must not survive the activity going away (rotation, recreate, tablet switch).
         if (chromeBar != null) chromeBar.dismissOverflow();
+        // Leaving the foreground must not leave a key/button held on the host (Windows keeps it lit otherwise).
+        if (hid != null) hid.releaseAllInputs();
+        if (gamepadView != null) gamepadView.releaseAll();
         super.onPause();
     }
 
@@ -261,7 +288,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         footer = new TextView(this);
-        footer.setText("PhoneKB v0.36.2 · 蓝牙 HID · 键盘 / 触控板 / 媒体 / 手柄 / 双手");
+        footer.setText("PhoneKB v0.37.7 · 蓝牙 HID · 平板 / 电脑 · 键盘 / 触控板 / 媒体 / 手柄");
         footer.setTextColor(Ui.TEXT_DIM);
         footer.setTextSize(11);
         footer.setGravity(Gravity.CENTER);
@@ -369,8 +396,14 @@ public class MainActivity extends Activity {
         powerButton = new PowerButtonView(this);
         powerButton.setListener(() -> hid.tapConsumer(HidConstants.CONSUMER_POWER));
         LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(Ui.dpi(this, 54), Ui.dpi(this, 44));
-        pLp.setMarginEnd(dp(10));
+        pLp.setMarginEnd(dp(8));
         bar.addFixed(powerButton, pLp);
+
+        devicePill = devicePillView(78, 32);
+        devicePill.setOnClickListener(v -> showDeviceSheet());
+        LinearLayout.LayoutParams devLp = new LinearLayout.LayoutParams(Ui.dpi(this, 78), Ui.dpi(this, 32));
+        devLp.setMarginEnd(dp(6));
+        bar.addFixed(devicePill, devLp);
 
         statusDot = plainText("●", 12, Ui.WARN);
         bar.addFixed(statusDot, new LinearLayout.LayoutParams(
@@ -387,6 +420,8 @@ public class MainActivity extends Activity {
         tLp.rightMargin = dp(8);
         bar.addFixed(statusTitle, tLp);
 
+        addDevicePills(bar, true);
+
         for (int i = 0; i < TAB_NAMES.length; i++) {
             final int index = i;
             TextView tab = chromePill(TAB_NAMES[i]);
@@ -395,33 +430,24 @@ public class MainActivity extends Activity {
             bar.addFixed(tab, chromePillLp(62));
         }
 
-        oneHandPill = chromePill("单手");
-        oneHandPill.setOnClickListener(v -> toggleOneHand());
-        bar.addCollapsible(oneHandPill, chromePillLp(56), "单手", this::toggleOneHand);
-
-        handPill = chromePill("右手");
-        handPill.setOnClickListener(v -> toggleHand());
-        bar.addCollapsible(handPill, chromePillLp(56),
-                () -> rightHanded ? "右手" : "左手", this::toggleHand);
-
         swapPill = chromePill("互换");
         swapPill.setOnClickListener(v -> toggleTwoHandSwap());
         swapPill.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
         bar.addCollapsible(swapPill, chromePillLp(52), "互换", this::toggleTwoHandSwap);
 
+        // 旋转 is pinned: it is the one action you reach for while holding the phone sideways.
         rotateButton = chromePill("旋转");
         rotateButton.setTextColor(Ui.TEXT);
         rotateButton.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
         rotateButton.setOnClickListener(v -> toggleOrientation());
         rotateButton.setOnLongClickListener(v -> { resetOrientationToSystem(); return true; });
-        bar.addCollapsible(rotateButton, chromePillLp(52), "旋转", this::toggleOrientation);
+        bar.addFixed(rotateButton, chromePillLp(52));
 
         pairButton = chromePill("配对");
         pairButton.setTextColor(Ui.TEXT);
         pairButton.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
         pairButton.setOnClickListener(v -> onPairClicked());
-        bar.addCollapsible(pairButton, chromePillLp(60),
-                () -> hid != null && hid.isConnected() ? "帮助" : "配对", this::onPairClicked);
+        bar.addFixed(pairButton, chromePillLp(60));
     }
 
     private void buildHeader() {
@@ -435,8 +461,14 @@ public class MainActivity extends Activity {
         powerButton = new PowerButtonView(this);
         powerButton.setListener(() -> hid.tapConsumer(HidConstants.CONSUMER_POWER));
         LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(Ui.dpi(this, 54), Ui.dpi(this, 48));
-        pLp.setMarginEnd(dp(10));
+        pLp.setMarginEnd(dp(8));
         header.addFixed(powerButton, pLp);
+
+        devicePill = devicePillView(78, 36);
+        devicePill.setOnClickListener(v -> showDeviceSheet());
+        LinearLayout.LayoutParams devLp = new LinearLayout.LayoutParams(Ui.dpi(this, 78), Ui.dpi(this, 36));
+        devLp.setMarginEnd(dp(4));
+        header.addFixed(devicePill, devLp);
 
         statusDot = plainText("●", 13, Ui.WARN);
         header.addFixed(statusDot, new LinearLayout.LayoutParams(
@@ -463,32 +495,86 @@ public class MainActivity extends Activity {
         texts.addView(statusDetail, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        swapPill = plainText("互换", 13, Ui.TEXT_DIM);
-        swapPill.setPadding(dp(12), dp(8), dp(12), dp(8));
-        swapPill.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
-        swapPill.setOnClickListener(v -> toggleTwoHandSwap());
-        LinearLayout.LayoutParams swLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        swLp.setMarginEnd(dp(8));
-        header.addCollapsible(swapPill, swLp, "互换", this::toggleTwoHandSwap);
+        addDevicePills(header, false);
 
-        rotateButton = plainText("旋转", 13, Ui.TEXT_DIM);
-        rotateButton.setPadding(dp(12), dp(8), dp(12), dp(8));
-        rotateButton.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
-        rotateButton.setOnClickListener(v -> toggleOrientation());
-        rotateButton.setOnLongClickListener(v -> { resetOrientationToSystem(); return true; });
-        LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        rLp.setMarginEnd(dp(8));
-        header.addCollapsible(rotateButton, rLp, "旋转", this::toggleOrientation);
+        // 「互换」 lives on the tab row in portrait (see buildPortraitTabBar), so this header has
+        // no collapsible child: 「更多」 never appears and the status title keeps its width.
 
         pairButton = plainText("配对", 13, Ui.TEXT_DIM);
         pairButton.setPadding(dp(14), dp(8), dp(14), dp(8));
         pairButton.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
         pairButton.setOnClickListener(v -> onPairClicked());
-        header.addCollapsible(pairButton, new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT),
-                () -> hid != null && hid.isConnected() ? "帮助" : "配对", this::onPairClicked);
+        LinearLayout.LayoutParams pairLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        pairLp.setMarginStart(dp(2));
+        header.addFixed(pairButton, pairLp);
+    }
+
+    /**
+     * 「平板 / 电脑」 folded into one pill that shows the current mode; tapping opens a small
+     * menu. Two separate pills cost ~100dp of toolbar for a switch that is set once a session,
+     * and the freed width pays for the bigger 「设备」 button beside it.
+     */
+    private void addDevicePills(ChromeBar bar, boolean compact) {
+        modePill = modePillView(compact ? 12 : 13);
+        modePill.setOnClickListener(this::showModeMenu);
+        int w = compact ? 64 : 62;
+        LinearLayout.LayoutParams lp = compact ? chromePillLp(w)
+                : new LinearLayout.LayoutParams(dp(w), dp(34));
+        if (!compact) {
+            lp.setMarginStart(dp(4));
+            lp.setMarginEnd(dp(4));
+        }
+        bar.addFixed(modePill, lp);
+    }
+
+    /** Icon + label button; the 「设备」 entry, drawn with an accent outline so it reads as primary. */
+    private LinearLayout devicePillView(int widthDp, int heightDp) {
+        LinearLayout pill = new LinearLayout(this);
+        pill.setOrientation(LinearLayout.HORIZONTAL);
+        pill.setGravity(Gravity.CENTER);
+        pill.setBackground(Ui.roundedStroke(this, Ui.SURFACE_2, Ui.ACCENT, 1.4f, heightDp * 0.34f));
+
+        devicePillIcon = new IconView(this, Icons.DEV_PHONE, Ui.ACCENT);
+        int iconSize = Math.round(heightDp * 0.50f);
+        LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(dp(iconSize), dp(iconSize));
+        ilp.rightMargin = dp(5);
+        pill.addView(devicePillIcon, ilp);
+
+        TextView label = plainText("设备", heightDp >= 34 ? 12.5f : 12, Ui.ACCENT);
+        label.setSingleLine(true);
+        pill.addView(label);
+        return pill;
+    }
+
+    /** Collapsed mode switch: 「电脑」 + a chevron, current mode written on the button. */
+    private LinearLayout modePillView(float sp) {
+        LinearLayout pill = new LinearLayout(this);
+        pill.setOrientation(LinearLayout.HORIZONTAL);
+        pill.setGravity(Gravity.CENTER);
+        pill.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
+
+        modeLabel = plainText(pcMode ? "电脑" : "平板", sp, Ui.TEXT);
+        modeLabel.setSingleLine(true);
+        Ui.autoSize(modeLabel, sp, 9);
+        pill.addView(modeLabel);
+
+        IconView chevron = new IconView(this, Icons.CHEVRON_DOWN, Ui.TEXT_DIM);
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(dp(9), dp(9));
+        clp.leftMargin = dp(3);
+        pill.addView(chevron, clp);
+        return pill;
+    }
+
+    private void showModeMenu(View anchor) {
+        PopupMenu menu = new PopupMenu(this, anchor);
+        menu.getMenu().add(Menu.NONE, 0, 0, "平板（Android）");
+        menu.getMenu().add(Menu.NONE, 1, 1, "电脑（Windows）");
+        menu.setOnMenuItemClickListener(item -> {
+            setPcMode(item.getItemId() == 1);
+            return true;
+        });
+        menu.show();
     }
 
     private void buildPortraitTabBar() {
@@ -506,20 +592,24 @@ public class MainActivity extends Activity {
             tabs[i] = cell;
             bar.addView(cell, portraitCellLp());
         }
-        oneHandPill = portraitCell("单手");
-        oneHandPill.setOnClickListener(v -> toggleOneHand());
-        bar.addView(oneHandPill, portraitCellLp());
-        handPill = portraitCell("右手");
-        handPill.setOnClickListener(v -> toggleHand());
-        handPill.setVisibility(View.GONE);
-        bar.addView(handPill, handPillLp());
-    }
+        // 双手-page probe: kept on this row instead of the header, so it never eats the title.
+        swapPill = portraitCell("互换");
+        swapPill.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
+        swapPill.setOnClickListener(v -> toggleTwoHandSwap());
+        swapPill.setVisibility(View.GONE);
+        LinearLayout.LayoutParams swLp = new LinearLayout.LayoutParams(Ui.dpi(this, 46), Ui.dpi(this, 34));
+        swLp.setMargins(dp(2), 0, dp(2), 0);
+        bar.addView(swapPill, swLp);
 
-    private LinearLayout.LayoutParams handPillLp() {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
-                ViewGroup.LayoutParams.WRAP_CONTENT, 0f);
-        lp.setMargins(dp(2), 0, dp(2), 0);
-        return lp;
+        // 旋转 sits on this row now that the 单手 entry is gone: same reach, always visible.
+        rotateButton = portraitCell("旋转");
+        rotateButton.setTextColor(Ui.TEXT);
+        rotateButton.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
+        rotateButton.setOnClickListener(v -> toggleOrientation());
+        rotateButton.setOnLongClickListener(v -> { resetOrientationToSystem(); return true; });
+        LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(Ui.dpi(this, 52), Ui.dpi(this, 34));
+        rLp.setMargins(dp(4), 0, dp(2), 0);
+        bar.addView(rotateButton, rLp);
     }
 
     private TextView chromePill(String label) {
@@ -566,6 +656,7 @@ public class MainActivity extends Activity {
             toast(layout == KeyboardView.LAYOUT_PHONE ? "已切换到手机布局" : "已切换到电脑布局");
         });
         keyboardView.setTouchpadAction(() -> toggleOverlay(OVERLAY_TOUCHPAD));
+        keyboardView.setPcMode(pcMode);
         touchpadView = new ControlPadView(this, hid);
         touchpadView.setListener(new ControlPadView.Listener() {
             @Override
@@ -579,6 +670,7 @@ public class MainActivity extends Activity {
             }
         });
         mediaView = new MediaView(this, hid);
+        mediaView.setPcMode(pcMode);
         if (!landscape) {
             mediaView.setToolpadRow(true);
             mediaView.setTouchpadAction(() -> toggleOverlay(OVERLAY_TOUCHPAD));
@@ -1060,6 +1152,26 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** 平板 / 电脑: same Bluetooth HID link, different key set, wording and pairing steps. */
+    private void setPcMode(boolean enabled) {
+        boolean changed = pcMode != enabled;
+        pcMode = enabled;
+        if (changed) prefs.edit().putInt("device_mode", enabled ? 1 : 0).apply();
+        if (keyboardView != null) {
+            keyboardView.setPcMode(enabled);
+            if (enabled && keyboardView.getLayout() == KeyboardView.LAYOUT_PHONE) {
+                // Windows needs Ctrl / Alt / Win, which only the PC-style layout carries.
+                keyboardView.setLayout(KeyboardView.LAYOUT_COMPUTER);
+            }
+        }
+        if (mediaView != null) mediaView.setPcMode(enabled);
+        refreshChrome();
+        applyStatus();
+        if (changed) {
+            toast(enabled ? "已切换到电脑模式 · 直连 Windows" : "已切换到平板模式 · 直连 Android");
+        }
+    }
+
     private void refreshChrome() {
         for (int i = 0; i < tabs.length; i++) {
             TextView tab = tabs[i];
@@ -1069,14 +1181,8 @@ public class MainActivity extends Activity {
             tab.setBackground(selected ? Ui.rounded(this, Ui.SURFACE_2, 12) : null);
             tab.setVisibility(oneHandMode ? View.GONE : View.VISIBLE);
         }
-        if (oneHandPill != null) {
-            oneHandPill.setTextColor(oneHandMode ? Ui.TEXT : Ui.TEXT_DIM);
-            oneHandPill.setBackground(oneHandMode ? Ui.rounded(this, Ui.SURFACE_2, 12) : null);
-        }
-        if (handPill != null) {
-            handPill.setText(rightHanded ? "右手" : "左手");
-            handPill.setVisibility(oneHandMode ? View.VISIBLE : View.GONE);
-        }
+        if (modeLabel != null) modeLabel.setText(pcMode ? "电脑" : "平板");
+        updateDevicePill();
         if (pairButton != null) {
             pairButton.setText(hid.isConnected() ? "帮助" : "配对");
             if (!landscape) pairButton.setVisibility(View.VISIBLE);
@@ -1084,8 +1190,22 @@ public class MainActivity extends Activity {
         refreshSwapPill();
     }
 
+    /** The 「设备」 button mirrors where the keys go: phone/tablet icon or a monitor. */
+    private void updateDevicePill() {
+        if (devicePillIcon == null || hid == null) return;
+        int type = 1;
+        try {
+            BluetoothDevice host = hid.currentHost();
+            if (host != null) type = HidManager.hostTypeOf(host);
+        } catch (RuntimeException ignored) {
+        }
+        devicePillIcon.setIcon(type == 2 ? Icons.DEV_PC
+                : (type == 3 ? Icons.DEV_TV : Icons.DEV_PHONE));
+    }
+
     private void applyStatus() {
         if (hid == null) return;
+        updateDevicePill();
         int state = hid.getState();
         String title = hid.getStatusTitle();
         String detail = hid.getStatusDetail();
@@ -1097,13 +1217,18 @@ public class MainActivity extends Activity {
         if (statusDot != null) statusDot.setTextColor(color);
         if (statusTitle != null) {
             String text = title == null ? "" : title;
-            if (landscape && detail != null && !detail.isEmpty()) text = text + " · " + detail;
+            // Landscape chrome is tight (tabs + 平板/电脑 + 旋转/帮助): the detail line is hidden there,
+            // so show the device name only — the colored dot already tells 已连接/等待.
+            if (landscape && detail != null && !detail.isEmpty()) text = detail;
             statusTitle.setText(text);
         }
         if (statusDetail != null) {
-            boolean show = detail != null && !detail.isEmpty();
-            statusDetail.setText(show ? detail : "");
-            statusDetail.setVisibility(show ? View.VISIBLE : View.GONE);
+            String mode = pcMode ? "电脑模式" : "平板模式";
+            String text = detail == null ? "" : detail;
+            if (text.isEmpty()) text = mode;
+            else if (landscape) text = text + " · " + mode;
+            statusDetail.setText(text);
+            statusDetail.setVisibility(View.VISIBLE);
         }
         refreshChrome();
     }
@@ -1178,13 +1303,21 @@ public class MainActivity extends Activity {
     // ---------------------------------------------------------------- dialogs
 
     private void showPairingDialog() {
+        String message = pcMode
+                ? "1. 手机现已可被蓝牙搜索 5 分钟\n"
+                + "2. 电脑上打开 设置 → 蓝牙和其他设备 → 添加设备 → 蓝牙，点你的手机（名字和手机「设置 → 我的设备」里显示的一致）\n"
+                + "3. 电脑和手机都确认配对码后，手机顶部会显示「已连接 · 电脑名」\n\n"
+                + "电脑不需要装任何软件：Windows 10 / 11 自带蓝牙 HID 键盘驱动，配对完就是一把键盘 + 鼠标 + 媒体键 + 手柄。\n"
+                + "如果电脑里还留着旧的配对记录，先在 设置 → 蓝牙和其他设备 里「删除设备」，再重新配一次。\n"
+                + "若状态显示注册失败：请先在手机设置中强制停止其他蓝牙键盘应用，再点状态文字重试。"
+                : "1. 手机现已可被蓝牙搜索 5 分钟\n"
+                + "2. 打开平板 设置 → 蓝牙，在「可用设备」里点你的手机（名字和手机「设置 → 我的设备」里显示的一致）\n"
+                + "3. 两端确认配对码后，手机顶部会显示「已连接」\n\n"
+                + "如果平板里还留着旧的配对记录，先点「忘记/取消配对」，再重新配一次。\n"
+                + "若状态显示注册失败：请先在手机设置中强制停止其他蓝牙键盘应用，再点状态文字重试。";
         new AlertDialog.Builder(this)
-                .setTitle("在平板上配对手机")
-                .setMessage("1. 手机现已可被蓝牙搜索 5 分钟\n"
-                        + "2. 打开平板 设置 → 蓝牙，在「可用设备」里点你的手机（名字和手机「设置 → 我的设备」里显示的一致）\n"
-                        + "3. 两端确认配对码后，手机顶部会显示「已连接」\n\n"
-                        + "如果平板里还留着旧的配对记录，先点「忘记/取消配对」，再重新配一次。\n"
-                        + "若状态显示注册失败：请先在手机设置中强制停止其他蓝牙键盘应用，再点状态文字重试。")
+                .setTitle(pcMode ? "在电脑上配对手机" : "在平板上配对手机")
+                .setMessage(message)
                 .setPositiveButton("知道了", null)
                 .show();
     }
@@ -1192,10 +1325,13 @@ public class MainActivity extends Activity {
     private void showHelpDialog() {
         new AlertDialog.Builder(this)
                 .setTitle("使用说明")
-                .setMessage("键盘：字母、数字和符号直接发到平板。键盘顶部有一行大工具栏：左边「切换布局」在手机布局和电脑布局之间来回切（会记住上次的选择），右边「触控板」键弹出触控板浮层（大触控区 + 右侧 ↑↓ 滚动 + 底部 返回/主页/后台），不用切页面就能移动指针和点击。\n\n"
+                .setMessage((pcMode
+                        ? "电脑模式：这套键发给 Windows 电脑 —— Win 键、Win+D、Alt+Tab、Win+Shift+S 截屏、Win+L 锁屏；常用键卡换成 任务视图 / 锁屏 / 媒体键。电脑不用装任何软件，Windows 10 / 11 自带蓝牙 HID 键盘驱动。顶栏那个写着「电脑」的按钮点开可以随时切回平板。\n\n"
+                        : "平板模式：这套键发给 Android 平板 / 手机。顶栏那个写着「平板」的按钮（右边带 ⌄）点开可以切到电脑模式，用来控制 Windows 电脑。\n\n")
+                        + "键盘：字母、数字和符号直接发到平板。键盘顶部有一行大工具栏：左边「切换布局」在手机布局和电脑布局之间来回切（会记住上次的选择），右边「触控板」键弹出触控板浮层（大触控区 + 右侧 ↑↓ 滚动 + 底部 返回/主页/后台），不用切页面就能移动指针和点击。\n\n"
                         + "手机布局：和普通手机键盘一样（数字行 1-0、qwerty、Shift / ⌫、Space / Enter），左下「符号」进入符号页，符号页左下「ABC」返回字母；数字行也可以用来选中文输入法的候选词。\n\n"
                         + "电脑布局：顶部一排快捷键 Ctrl+C / Ctrl+V / Ctrl+X / Ctrl+A / Alt+Tab，下面带 Tab、方向键和 Ctrl / Alt / Win，适合敲命令、远程桌面和组合键。\n\n"
-                        + "指针灵敏度：触控板页触控卡片左上角的「灵敏度 1.0x」胶囊可以打开设置——指针速度 0.4x–2.5x（1.0x 就是以前的手感）、加速度（快扫自动加速）、滚轮速度（一次滑动滚几行）；改完对触控板页、单手遥控台、触控板浮层、手柄页触控区同时生效，并且会记住。\n\n"
+                        + "指针灵敏度：触控板页触控卡片左上角的「灵敏度 1.0x」胶囊可以打开设置——指针速度 0.4x–2.5x（1.0x 就是以前的手感）、加速度（快扫自动加速）、滚轮速度（一次滑动滚几行）；改完对触控板页、触控板浮层、手柄页触控区同时生效，并且会记住。\n\n"
                         + "触控板：单指滑动移动指针，单指点击=左键，双指点击=右键，双指上下滑=滚动，右侧 ↑↓ 按住连续滚动；左侧「数字」弹出数字键盘（输入密码），「键盘」弹出简易手机键盘（带数字行，数字也可用来选输入法的候选词），「菜单」等于平板菜单键。\n\n"
                         + "媒体页：从上到下是「触控板」快键、媒体卡和常用键卡。媒体卡第一排三个大方键：上一段 ⏮ / 播放暂停 ⏯ / 下一段 ⏭；第二排两个长条：−10s / ＋10s，发的是方向键 ← / →，点一次快退或快进 10 秒，按住连续快退 / 快进（长按约 0.4 秒后每 0.1 秒发一次），上一段 / 下一段键按住也会连续跳。\n\n"
                         + "常用键卡是 2 行 × 5 列的圆形大键：第一排 音量+ / 音量− / 静音 / 截屏 / 多任务，第二排 亮度− / 亮度+ / 返回 / 主页 / 菜单。截屏发的是蓝牙键盘的 PrintScreen 键，Android 会直接截屏；多任务发 Alt+Tab（系统「切换应用」快捷键）。\n\n"
@@ -1203,11 +1339,13 @@ public class MainActivity extends Activity {
                         + "手柄：左上的「移动盘」按钮打开设置，里有三个段：「布局」可选 浮键 / 皮肤；「移动盘类型」按键 / 圆盘 / 摇杆；「移动盘大小」「按键大小」两个 60%–150% 滑块（只缩放按键本身）。浮键＝现在这套：左下方向盘、右下 X/Y/A/B、两侧中段 L1/R1、菜单键在顶部条；皮肤＝整机手柄外观：圆角机身 + 十字键圆环 + ABXY 圆环 + LB/LT/RB/RT + 左右 L/R 模拟摇杆（摇杆是 4 个轴，换新版后平板要「忘记设备→重新配对」一次才会识别）+ 居中的 SELECT/START。自定义位置：在设置里点「编辑布局·拖动按键改位置」，或者在手柄页空白处按住 3 秒，进入编辑模式后每个键出现蓝虚线框，单指拖动即可挪位置，松手自动保存；顶部有「重置 / 完成」，横屏和竖屏各存一套。「触控」小键一键切换 关 / 中间 / 全屏：中间＝页面正中一块看得见边界的触控板；全屏＝除按键外整片空白都能触控。触控板手势和「触控板」页一致：单指移动、轻点＝左键、双指点击＝右键、双指上下滑＝滚动；「只移动」档位下只移指针不点击。浮键布局下也有一行四个肩键：L1 / LT（左）与 RT / R1（右），皮肤布局则是 LB/LT/RB/RT；如果老游戏只认 L1/R1、不认 LT/RT，可以在「帮助 → 更多设置 → 手柄 LT / RT 兼容」打开，让 LT/RT 同时发 L1/R1。移动盘类型选「摇杆」时，整块圆盘都能按、摇杆头跟手，推的是左摇杆 X/Y 模拟轴；只有当游戏只认方向键时才把「摇杆同时发方向键」打开（打开后左上斜向会退化成左）。\n\n"
                         + "手柄页触控板浮层：右上角的「触控板」小键点一下，右侧浮出一块触控板浮层（单指移动、轻点＝左键、双指点击＝右键、双指滑＝滚动），右下角竖排是 返回 / 主页 / 后台。点浮层外面的任何地方就会收起，左半屏的方向盘和 ABXY 照样能按；再点一次「触控板」收起。浮层左上角有个「⇔」把手：按住约 0.3 秒后左右拖动可以挪动整块浮层的位置，松手就记住，下次打开还在那儿。\n\n"
                         + "双手模式：左边是触控板，右边是按键板（从上到下：音量、媒体、返回 / 主页 / 后台、数字 / 键盘），左右手各管一半。双手页顶部有「互换」键：点一下把触控区和按键区对调（横屏左右对调，竖屏上下对调），方便左右手习惯不同的人；互换状态会记住。\n\n"
-                        + "单手模式：右侧（或左侧）面板集中了大触控区和常用键；点「键盘」切成拇指键盘，点「切到遥控台」切回。\n\n"
+                        + "设备：顶栏左边那个带图标的「设备」按钮，列出所有配对过的主机（平板 / 电脑 / 电视），点一下就能切换，不用重新配对，也不用再取消配对。旁边写着当前模式的按钮（「平板 ⌄」/「电脑 ⌄」）点开可以在平板模式和电脑模式之间切换；「更多设置」里还有「设备抢连守护」，切到电脑后如果平板又把手机抢回去，2 秒内会自动切回来。\n\n"
                         + "竖屏：键盘页上半部分是触控区、下半部分是贴底的键盘（按键大小和普通手机键盘接近）；中间的分隔条可以上下拖动调整两区比例（拖到 48% / 58% / 62% 附近会吸附，双击分隔条恢复默认 58/42）。触控板页和媒体页的功能区也贴着屏幕底部，顶部分隔条可以拖动调整功能区高度（上方留空方便拇指操作，双击分隔条恢复默认：触控板页 80% / 媒体页 78%）；媒体页顶部还有「触控板」键，可以直接弹出触控板浮层；媒体条下面还有 4 个药丸：「亮度 − / 亮度 ＋」（调屏幕亮度）、「−10s / ＋10s」（快退/快进 10 秒），横屏时它们会变成左右各竖排两枚。亮度键走蓝牙 HID 的 Consumer 用法（usage），部分平板（iQOO / vivo）会直接忽略这个 usage，App 这边绕不过去。数字键盘 / 键盘 / 触控板的浮层都从屏幕底部弹出。\n\n"
-                        + "横屏会自动切换紧凑工具栏和全屏显示。顶部最右侧的「旋转」键可以随时手动切换横竖屏（切过去后会一直保持，直到再点一次；长按「旋转」恢复跟随系统自动旋转）；同一栏最左边的电源键要按住 0.6 秒才发送，避免误触。\n\n"
-                        + "界面大小：「自动」会按屏幕宽度和系统字体大小自动适配，换手机或平板不用重新设置；如果按钮文字被截断或界面太挤，可以点下面的「界面大小」选「小」或「标准」。顶部一栏放不下时，右侧会出现「更多」按钮，单手 / 右手 / 互换 / 旋转 / 帮助会按屏幕宽度自动收进菜单。\n\n"
-                        + "中文输入：蓝牙键盘只能发送字母和按键，中文请用平板自己的输入法（手机这边专注当键盘、触控板和手柄）。\n\n"
+                        + "横屏会自动切换紧凑工具栏和全屏显示。「旋转」键一直露在外面（竖屏在页签那一行的最右边，横屏在顶栏右侧），点一下手动切换横竖屏（切过去后会一直保持，直到再点一次；长按「旋转」恢复跟随系统自动旋转）；同一栏最左边的电源键要按住 0.6 秒才发送，避免误触。\n\n"
+                        + "界面大小：「自动」会按屏幕宽度和系统字体大小自动适配，换手机或平板不用重新设置；如果按钮文字被截断或界面太挤，可以点下面的「界面大小」选「小」或「标准」。顶部一栏放不下时，右侧会出现「更多」按钮，互换 / 帮助这些次要按钮会按屏幕宽度自动收进菜单；「设备」和「旋转」始终露在外面。\n\n"
+                        + (pcMode
+                        ? "中文输入：蓝牙只发按键编号，中文请用电脑自己的输入法（微软拼音等），手机这边专注当键盘、触控板和手柄。\n\n"
+                        : "中文输入：蓝牙键盘只能发送字母和按键，中文请用平板自己的输入法（手机这边专注当键盘、触控板和手柄）。\n\n")
                         + "配对：点右上角「配对」让手机可被发现，然后在平板上搜索并配对。\n\n"
                         + "如果平板上所有按键都突然没反应（App 更新后常见）：平板会缓存旧的蓝牙 HID 描述。请到平板 设置 → 蓝牙，找到本机设备 → 点右侧详情 →「取消配对 / 忘记设备」，然后回到 App 点「配对」重新配一次，之后所有功能恢复。")
                 .setPositiveButton("知道了", null)
@@ -1241,10 +1379,27 @@ public class MainActivity extends Activity {
         int side = Ui.dpi(this, 18);
         box.setPadding(side, Ui.dpi(this, 6), side, 0);
 
+        addSettingsLabel(box, "设备类型（键盘发到哪台设备）");
+        addSettingsChoice(box, new String[]{"平板（Android）", "电脑（Windows）"},
+                pcMode ? 1 : 0,
+                index -> setPcMode(index == 1));
+
         addSettingsLabel(box, "指针点击方式");
         addSettingsChoice(box, new String[]{"抬手点击（默认）", "按下即点"},
                 PointerSettings.clickDown() ? 1 : 0,
                 index -> PointerSettings.setClickDown(this, index == 1));
+
+        addSettingsLabel(box, "指针上报节奏（越小越跟手，越大越省蓝牙）");
+        int[] gapValues = {2, 6, 9, 12};
+        String[] gapLabels = {"2 ms 极速（旧行为）", "6 ms 跟手", "9 ms 标准（默认）", "12 ms 省蓝牙"};
+        int gapIndex = 2;
+        int storedGap = PointerSettings.reportMs();
+        for (int i = 0; i < gapValues.length; i++) if (gapValues[i] == storedGap) gapIndex = i;
+        addSettingsChoice(box, gapLabels, gapIndex, index -> {
+            PointerSettings.setReportMs(this, gapValues[index]);
+            HidManager.mouseGapMs = gapValues[index];
+            toast("指针节奏已改为每 " + gapValues[index] + " ms 一份报告");
+        });
 
         addSettingsLabel(box, "长按拖拽阈值");
         final int[] pressValues = {250, 350, 450};
@@ -1259,6 +1414,25 @@ public class MainActivity extends Activity {
         addSettingsChoice(box, new String[]{"关（默认）", "开（老游戏只认 L1/R1）"},
                 PointerSettings.ltCompat() ? 1 : 0,
                 index -> PointerSettings.setLtCompat(this, index == 1));
+
+        addSettingsLabel(box, "设备抢连守护（切到别的设备后，原设备自己连回来时自动切回）");
+        addSettingsChoice(box, new String[]{"关", "开（默认）"}, hid != null && hid.guardEnabled() ? 1 : 0,
+                index -> {
+                    if (hid != null) hid.setGuardEnabled(index == 1);
+                    toast(index == 1 ? "已开启设备抢连守护" : "已关闭设备抢连守护");
+                });
+
+        addSettingsLabel(box, "手柄方向键居中值（游戏里方向一直亮 / 一直按着时换一个试）");
+        int[] hatValues = {0x0F, 8, 0};
+        String[] hatLabels = {"15（标准，默认）", "8", "0"};
+        int hatIndex = 0;
+        int storedHat = prefs.getInt("gp_null_hat", 0x0F);
+        for (int i = 0; i < hatValues.length; i++) if (hatValues[i] == storedHat) hatIndex = i;
+        addSettingsChoice(box, hatLabels, hatIndex, index -> {
+            prefs.edit().putInt("gp_null_hat", hatValues[index]).apply();
+            GamepadView.setNeutralHat(hatValues[index]);
+            toast("方向键居中值已改为 " + hatValues[index] + "，回游戏里再试一次");
+        });
 
         addSettingsLabel(box, "极速模式（少震动 / 移动中不重绘）");
         addSettingsChoice(box, new String[]{"关", "开（更跟手，默认）"},
@@ -1281,6 +1455,196 @@ public class MainActivity extends Activity {
                 .setView(scroll)
                 .setPositiveButton("关闭", null)
                 .show();
+    }
+
+    // ------------------------------------------------------------ 设备切换
+
+    private static String hostTypeName(BluetoothDevice d) {
+        int t = HidManager.hostTypeOf(d);
+        return t == 2 ? "电脑" : (t == 1 ? "平板 / 手机" : "其他");
+    }
+
+    private static int iconForType(int type) {
+        return type == 2 ? Icons.DEV_PC : (type == 3 ? Icons.DEV_TV : Icons.DEV_PHONE);
+    }
+
+    private static int hostTypeOf(BluetoothDevice d) {
+        return HidManager.hostTypeOf(d);
+    }
+
+    private static String deviceName(BluetoothDevice d) {
+        try {
+            String n = d.getName();
+            return n == null || n.isEmpty() ? d.getAddress() : n;
+        } catch (Exception e) {
+            return "未知设备";
+        }
+    }
+
+    private static String relativeTime(long at) {
+        if (at <= 0L) return "没连过";
+        long span = System.currentTimeMillis() - at;
+        if (span < 60_000L) return "刚刚";
+        if (span < 3_600_000L) return (span / 60_000L) + " 分钟前";
+        if (span < 6 * 3_600_000L) return (span / 3_600_000L) + " 小时前";
+        if (span < 48 * 3_600_000L) {
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("昨天 HH:mm", java.util.Locale.CHINA);
+            return f.format(new java.util.Date(at));
+        }
+        return (span / 86_400_000L) + " 天前";
+    }
+
+    /** 「设备」panel: choose which bonded host the keyboard talks to — no re-pairing needed. */
+    private void showDeviceSheet() {
+        if (hid == null) {
+            Log.w(TAG, "showDeviceSheet: hid null");
+            return;
+        }
+        final java.util.List<BluetoothDevice> hosts = hid.bondedHosts();
+        Log.i(TAG, "showDeviceSheet hosts=" + hosts.size() + " landscape=" + landscape);
+        final BluetoothDevice current = hid.currentHost();
+
+        final Dialog dialog = new Dialog(this);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(18), dp(14), dp(18), dp(14));
+        box.setBackground(Ui.rounded(this, Ui.SURFACE, 20));
+
+        TextView title = plainText("连接设备", 18, Ui.TEXT);
+        title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        box.addView(title);
+        TextView sub = plainText("已保存 " + hosts.size() + " 台 · 点一下就能换，不用重新配对", 11, Ui.TEXT_DIM);
+        sub.setPadding(0, dp(4), 0, dp(10));
+        box.addView(sub);
+
+        if (hosts.isEmpty()) {
+            TextView empty = plainText("还没有配对过的设备，点下面「配对新设备…」先配一次", 12, Ui.TEXT_DIM);
+            empty.setPadding(0, dp(6), 0, dp(12));
+            box.addView(empty);
+        }
+        for (final BluetoothDevice d : hosts) {
+            boolean isCurrent = current != null && current.equals(d);
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(10), dp(8), dp(10), dp(8));
+            row.setBackground(Ui.rounded(this, Ui.SURFACE_2, 14));
+
+            FrameLayout badge = new FrameLayout(this);
+            badge.setBackground(Ui.rounded(this, Ui.SURFACE, 16));
+            IconView glyph = new IconView(this, iconForType(hostTypeOf(d)),
+                    isCurrent ? Ui.ACCENT : Ui.TEXT_DIM);
+            badge.addView(glyph, new FrameLayout.LayoutParams(dp(16), dp(16), Gravity.CENTER));
+            row.addView(badge, new LinearLayout.LayoutParams(dp(32), dp(32)));
+
+            LinearLayout texts = new LinearLayout(this);
+            texts.setOrientation(LinearLayout.VERTICAL);
+            texts.setPadding(dp(10), 0, dp(8), 0);
+            texts.setClipToPadding(true);
+            row.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            TextView name = plainText(deviceName(d), 14, Ui.TEXT);
+            if (isCurrent) {
+                // A green dot in front of the name replaces the old 「● 已连接」 label: the row's right
+                // side is now taken by the 断开 button (v0.37.7).
+                android.text.SpannableString dotName =
+                        new android.text.SpannableString("● " + deviceName(d));
+                dotName.setSpan(new android.text.style.ForegroundColorSpan(Ui.OK), 0, 1,
+                        android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                name.setText(dotName);
+            }
+            name.setSingleLine(true);
+            name.setEllipsize(TextUtils.TruncateAt.END);
+            name.setGravity(Gravity.START);
+            name.setIncludeFontPadding(false);
+            texts.addView(name);
+            TextView subLine = plainText(hostTypeName(d) + " · " + relativeTime(hid.lastSeen(d)), 10, Ui.TEXT_DIM);
+            subLine.setGravity(Gravity.START);
+            subLine.setSingleLine(true);
+            subLine.setEllipsize(TextUtils.TruncateAt.END);
+            subLine.setIncludeFontPadding(false);
+            texts.addView(subLine);
+
+            if (isCurrent) {
+                TextView cut = plainText("断开", 11, Ui.ERR);
+                cut.setGravity(Gravity.CENTER);
+                cut.setBackground(Ui.roundedStroke(this, Ui.SURFACE, Ui.ERR, 1.4f, 13));
+                cut.setPadding(dp(12), dp(4), dp(12), dp(4));
+                cut.setOnClickListener(v -> {
+                    dialog.dismiss();
+                    hid.disconnectCurrent();
+                    toast("已断开 · 点「切换」可以连回来");
+                    // Re-open the list so the row flips to 「切换」 right away.
+                    getWindow().getDecorView().postDelayed(this::showDeviceSheet, 1400);
+                });
+                row.addView(cut);
+            } else {
+                TextView go = plainText("切换", 11, Ui.ACCENT);
+                go.setGravity(Gravity.CENTER);
+                go.setBackground(Ui.rounded(this, Ui.SURFACE, 12));
+                go.setPadding(dp(10), dp(4), dp(10), dp(4));
+                row.addView(go);
+            }
+
+            row.setOnClickListener(v -> {
+                if (current != null && current.equals(d)) {
+                    toast("现在连的就是这台");
+                    return;
+                }
+                dialog.dismiss();
+                hid.switchTo(d);
+            });
+            LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            rowLp.topMargin = dp(6);
+            box.addView(row, rowLp);
+        }
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setPadding(0, dp(12), 0, 0);
+        box.addView(actions);
+
+        TextView refresh = plainText("刷新列表", 12, Ui.TEXT);
+        refresh.setGravity(Gravity.CENTER);
+        refresh.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
+        refresh.setOnClickListener(v -> {
+            dialog.dismiss();
+            box.postDelayed(this::showDeviceSheet, 120);
+        });
+        LinearLayout.LayoutParams halfLp = new LinearLayout.LayoutParams(0, dp(38), 1f);
+        halfLp.rightMargin = dp(8);
+        actions.addView(refresh, halfLp);
+
+        TextView pair = plainText("配对新设备…", 12, Ui.ACCENT);
+        pair.setGravity(Gravity.CENTER);
+        pair.setBackground(Ui.rounded(this, Ui.SURFACE_2, 12));
+        pair.setOnClickListener(v -> {
+            dialog.dismiss();
+            showPairingDialog();
+        });
+        actions.addView(pair, new LinearLayout.LayoutParams(0, dp(38), 1f));
+
+        TextView note = plainText("蓝牙 HID 一次只能连一台主机；切换时会先松开所有按住的键", 10, Ui.TEXT_DIM);
+        note.setPadding(0, dp(10), 0, 0);
+        box.addView(note);
+
+        dialog.setContentView(box);
+        Window w = dialog.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            int width = landscape
+                    ? Math.min(getResources().getDisplayMetrics().widthPixels - dp(48), dp(360))
+                    : getResources().getDisplayMetrics().widthPixels - dp(16);
+            w.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT);
+            w.setGravity(landscape ? Gravity.CENTER : Gravity.BOTTOM);
+            w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            WindowManager.LayoutParams lp = w.getAttributes();
+            lp.dimAmount = 0.6f;
+            w.setAttributes(lp);
+        }
+        dialog.show();
     }
 
     private void addSettingsLabel(LinearLayout box, String text) {
@@ -1359,6 +1723,62 @@ public class MainActivity extends Activity {
         if (statusTitle != null) statusTitle.postDelayed(this::showHelpDialog, 800);
     }
 
+    /**
+     * Debug: walk every gamepad control one at a time (`--ei gpsweep 1`) so the host's
+     * 「游戏控制器 → 属性 → 测试」 page can be checked key by key. Each step is toasted and logged.
+     */
+    /**
+     * Debug: drive the pointer at 240 Hz for a few seconds (`--ei mousetest 1`) so the report
+     * cadence can be measured on the host side without touching the screen.
+     */
+    private void startMouseStress(int durationMs) {
+        final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+        final long end = android.os.SystemClock.uptimeMillis() + durationMs;
+        handler.postDelayed(new Runnable() {
+            int tick;
+
+            @Override
+            public void run() {
+                if (hid == null || android.os.SystemClock.uptimeMillis() > end) {
+                    toast("指针压力测试结束");
+                    return;
+                }
+                tick++;
+                int dx = (tick % 20 < 10) ? 3 : -3;
+                hid.mouseMove(dx, 0);
+                handler.postDelayed(this, 4);
+            }
+        }, 800);
+    }
+
+    private void startGamepadSweep() {
+        final int[] masks = {HidConstants.GP_A, HidConstants.GP_B, HidConstants.GP_X, HidConstants.GP_Y,
+                HidConstants.GP_L1, HidConstants.GP_R1, HidConstants.GP_L2, HidConstants.GP_R2,
+                HidConstants.GP_SELECT, HidConstants.GP_START,
+                0, 0, 0, 0, 0, 0, 0, 0};
+        final int[] hats = {15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 0, 1, 2, 3, 4, 5, 6, 7};
+        final String[] names = {"A", "B", "X", "Y", "L1", "R1", "LT", "RT", "SELECT", "START",
+                "方向 上", "方向 右上", "方向 右", "方向 右下", "方向 下", "方向 左下", "方向 左", "方向 左上"};
+        final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+        handler.postDelayed(new Runnable() {
+            int step = -1;
+
+            @Override
+            public void run() {
+                step++;
+                if (step >= names.length) step = 0;
+                if (hid == null) return;
+                hid.sendGamepadFull(masks[step], hats[step], 0, 0, 0, 0);
+                Log.i(TAG, "gpsweep " + (step + 1) + "/" + names.length + " " + names[step]);
+                toast("手柄自检 " + (step + 1) + "/" + names.length + "：" + names[step]);
+                handler.postDelayed(() -> {
+                    if (hid != null) hid.sendGamepadFull(0, 15, 0, 0, 0, 0);
+                }, 520);
+                handler.postDelayed(this, 900);
+            }
+        }, 600);
+    }
+
     private void toast(String message) {
         android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_SHORT).show();
     }
@@ -1396,6 +1816,40 @@ public class MainActivity extends Activity {
             } else {
                 setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
             }
+        }
+        if (intent.hasExtra("gpsweep")) startGamepadSweep();
+        if (intent.hasExtra("devlist")) {
+            Log.i(TAG, "devlist requested, landscape=" + landscape);
+            // A main-looper handler, not view.postDelayed: the forced orientation change recreates the
+            // activity, and a pending view.post on the destroyed hierarchy would never run.
+            new Handler(Looper.getMainLooper()).postDelayed(this::showDeviceSheet, 1600);
+        }
+        // Debug/test hook: same call as tapping 「断开」 on the connected row, so the muted
+        // auto-reconnect can be checked from adb (there is no way to tap in MIUI).
+        if (intent.hasExtra("devcut")) {
+            int ms = Math.max(500, intent.getIntExtra("devcut", 6000));
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                if (hid != null) hid.disconnectCurrent();
+            }, ms);
+        }
+        if (intent.hasExtra("mousetest")) {
+            int ms = intent.getIntExtra("mousetest", 0);
+            if (ms < 1000) ms = 4000;
+            startMouseStress(ms);
+        }
+        if (intent.hasExtra("mousegap")) {
+            int gap = Math.max(1, intent.getIntExtra("mousegap", 9));
+            PointerSettings.setReportMs(this, gap);
+            HidManager.mouseGapMs = gap;
+        }
+        if (intent.hasExtra("gpnull")) {
+            int v = intent.getIntExtra("gpnull", 0x0F);
+            prefs.edit().putInt("gp_null_hat", v).apply();
+            GamepadView.setNeutralHat(v);
+        }
+        // Debug/test hook: same code path as the top-bar 平板 / 电脑 switch.
+        if (intent.hasExtra("devmode")) {
+            setPcMode(intent.getIntExtra("devmode", 0) != 0);
         }
         // Debug/test hook: same code path as the 双手 page 「互换」 button.
         if (intent.hasExtra("twoswap")) {
@@ -1478,6 +1932,12 @@ public class MainActivity extends Activity {
         } else if (mediaTest == 3 && hid != null) {
             contentFrame.postDelayed(() -> hid.tapConsumer(HidConstants.CONSUMER_BRIGHTNESS_DECREMENT), 800);
             contentFrame.postDelayed(() -> hid.tapConsumer(HidConstants.CONSUMER_BRIGHTNESS_INCREMENT), 1600);
+        }
+        // Debug/test hook: open the collapsed 平板/电脑 menu so it can be screenshotted.
+        if (intent.getIntExtra("modemenu", 0) == 1) {
+            getWindow().getDecorView().postDelayed(() -> {
+                if (modePill != null) showModeMenu(modePill);
+            }, 900);
         }
         // Debug/test hook: open the adaptive-toolbar overflow menu so it can be screenshotted.
         if (intent.getIntExtra("moremenu", 0) == 1) {

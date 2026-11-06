@@ -34,6 +34,8 @@ public class MediaView extends View {
     private static final int KIND_BRIGHT = 1;
     private static final int KIND_SCREENSHOT = 2;
     private static final int KIND_RECENTS = 3;
+    /** PC mode: a keyboard shortcut (modifiers + keycode) instead of a consumer usage. */
+    private static final int KIND_SHORTCUT = 4;
 
     private static final class Key {
         final RectF rect = new RectF();
@@ -42,12 +44,19 @@ public class MediaView extends View {
         final int kind;
         /** Consumer usage id, or +1 / -1 for the brightness pair. */
         final int code;
+        /** Keyboard modifiers for KIND_SHORTCUT keys. */
+        final int mods;
 
         Key(int icon, String label, int kind, int code) {
+            this(icon, label, kind, code, 0);
+        }
+
+        Key(int icon, String label, int kind, int code, int mods) {
             this.icon = icon;
             this.label = label;
             this.kind = kind;
             this.code = code;
+            this.mods = mods;
         }
     }
 
@@ -83,7 +92,9 @@ public class MediaView extends View {
     private final float pillRowHeight;
 
     /** 2 rows x 5 round function keys. */
-    private final Key[] keys;
+    private Key[] keys;
+    /** PC mode: the function keys become Windows shortcuts instead of Android keys. */
+    private boolean pcMode;
     private final Map<Integer, Key> pressed = new HashMap<>();
 
     private final float corner;
@@ -151,18 +162,52 @@ public class MediaView extends View {
         for (int i = 0; i < BAR_COUNT; i++) barAreas[i] = new RectF();
         for (int i = 0; i < PILL_COUNT; i++) pillAreas[i] = new RectF();
 
-        keys = new Key[]{
-                new Key(Icons.VOL_UP, "音量+", KIND_CONSUMER, HidConstants.CONSUMER_VOLUME_UP),
-                new Key(Icons.VOL_DOWN, "音量−", KIND_CONSUMER, HidConstants.CONSUMER_VOLUME_DOWN),
-                new Key(Icons.MUTE, "静音", KIND_CONSUMER, HidConstants.CONSUMER_MUTE),
-                new Key(Icons.SCREENSHOT, "截屏", KIND_SCREENSHOT, 0),
-                new Key(Icons.RECENTS, "多任务", KIND_RECENTS, 0),
+        buildKeys();
+    }
 
-                new Key(Icons.SUN_DOWN, "亮度−", KIND_BRIGHT, -1),
-                new Key(Icons.SUN_UP, "亮度+", KIND_BRIGHT, 1),
-                new Key(Icons.BACK, "返回", KIND_CONSUMER, HidConstants.CONSUMER_AC_BACK),
-                new Key(Icons.HOME, "主页", KIND_CONSUMER, HidConstants.CONSUMER_AC_HOME),
-                new Key(Icons.MENU, "菜单", KIND_CONSUMER, HidConstants.CONSUMER_MENU)};
+    private void buildKeys() {
+        if (pcMode) {
+            // Windows: screenshot = Win+Shift+S, task view = Win+Tab, lock = Win+L, context menu = Shift+F10.
+            keys = new Key[]{
+                    new Key(Icons.VOL_UP, "音量+", KIND_CONSUMER, HidConstants.CONSUMER_VOLUME_UP),
+                    new Key(Icons.VOL_DOWN, "音量−", KIND_CONSUMER, HidConstants.CONSUMER_VOLUME_DOWN),
+                    new Key(Icons.MUTE, "静音", KIND_CONSUMER, HidConstants.CONSUMER_MUTE),
+                    new Key(Icons.SCREENSHOT, "截屏", KIND_SHORTCUT, HidConstants.KEY_S,
+                            HidConstants.MOD_LEFT_GUI | HidConstants.MOD_LEFT_SHIFT),
+                    new Key(Icons.RECENTS, "任务视图", KIND_SHORTCUT, HidConstants.KEY_TAB,
+                            HidConstants.MOD_LEFT_GUI),
+
+                    new Key(Icons.POWER, "锁屏", KIND_SHORTCUT, HidConstants.KEY_L,
+                            HidConstants.MOD_LEFT_GUI),
+                    new Key(Icons.PREV, "上一首", KIND_CONSUMER, HidConstants.CONSUMER_PREV_TRACK),
+                    new Key(Icons.PLAY_PAUSE, "播放", KIND_CONSUMER, HidConstants.CONSUMER_PLAY_PAUSE),
+                    new Key(Icons.NEXT, "下一首", KIND_CONSUMER, HidConstants.CONSUMER_NEXT_TRACK),
+                    new Key(Icons.MENU, "菜单", KIND_SHORTCUT, HidConstants.KEY_F10,
+                            HidConstants.MOD_LEFT_SHIFT)};
+        } else {
+            keys = new Key[]{
+                    new Key(Icons.VOL_UP, "音量+", KIND_CONSUMER, HidConstants.CONSUMER_VOLUME_UP),
+                    new Key(Icons.VOL_DOWN, "音量−", KIND_CONSUMER, HidConstants.CONSUMER_VOLUME_DOWN),
+                    new Key(Icons.MUTE, "静音", KIND_CONSUMER, HidConstants.CONSUMER_MUTE),
+                    new Key(Icons.SCREENSHOT, "截屏", KIND_SCREENSHOT, 0),
+                    new Key(Icons.RECENTS, "多任务", KIND_RECENTS, 0),
+
+                    new Key(Icons.SUN_DOWN, "亮度−", KIND_BRIGHT, -1),
+                    new Key(Icons.SUN_UP, "亮度+", KIND_BRIGHT, 1),
+                    new Key(Icons.BACK, "返回", KIND_CONSUMER, HidConstants.CONSUMER_AC_BACK),
+                    new Key(Icons.HOME, "主页", KIND_CONSUMER, HidConstants.CONSUMER_AC_HOME),
+                    new Key(Icons.MENU, "菜单", KIND_CONSUMER, HidConstants.CONSUMER_MENU)};
+        }
+    }
+
+    /** PC mode swaps the function-key card for Windows shortcuts. */
+    public void setPcMode(boolean enabled) {
+        if (pcMode == enabled) return;
+        pcMode = enabled;
+        pressed.clear();
+        buildKeys();
+        layoutKeyRects();
+        invalidate();
     }
 
     /** Portrait media page: a full-width touchpad button above the media controls. */
@@ -247,6 +292,12 @@ public class MediaView extends View {
         }
 
         // Function keys: 2 rows x 5 equal cells.
+        layoutKeyRects();
+    }
+
+    /** Lays out the 2 x 5 function-key grid; also called after the key set is rebuilt. */
+    private void layoutKeyRects() {
+        if (keys == null || keypadCard.isEmpty()) return;
         float gridPad = Ui.dp(getContext(), 8);
         float gridLeft = keypadCard.left + gridPad;
         float gridRight = keypadCard.right - gridPad;
@@ -384,6 +435,9 @@ public class MediaView extends View {
             case KIND_RECENTS:
                 // No HID usage maps to the recents key, so use the Android keyboard shortcut.
                 hid.tapKey(HidConstants.MOD_LEFT_ALT, HidConstants.KEY_TAB);
+                break;
+            case KIND_SHORTCUT:
+                hid.tapCombo(key.mods, key.code);
                 break;
             default:
                 hid.tapConsumer(key.code);

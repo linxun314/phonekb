@@ -7,11 +7,11 @@ import android.bluetooth.BluetoothHidDeviceAppSdpSettings;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothProfile;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.Process;
-import android.os.SystemClock;
 import android.os.SystemClock;
 import android.util.Log;
 
@@ -128,8 +128,11 @@ public final class HidManager {
 
     /** Records one pointer report: how long it took from the touch event to reaching Bluetooth. */
     private static void recordPointerLatency(long eventTimeMs, int costMs) {
-        long age = SystemClock.uptimeMillis() - eventTimeMs;
+        long now = SystemClock.uptimeMillis();
+        long age = now - eventTimeMs;
         if (age < 0) age = 0;
+        if (rateStartAt == 0L) rateStartAt = now;
+        rateCount++;
         synchronized (statSample) {
             statSample[statCursor] = age;
             statCost[statCursor] = costMs;
@@ -138,7 +141,24 @@ public final class HidManager {
         }
     }
 
-    /** "p50/p95 age, p50/p95 send cost" - or null when nothing was measured yet. */
+    /** Last pacing gap actually used, so the timing log can show the cadence we are running at. */
+    static final class MouseStats { static long lastGap; }
+
+    private static long rateStartAt;
+    private static int rateCount;
+
+    /** Mouse reports actually dispatched since the last summary — the cadence we are pacing at. */
+    private static String takeReportRate() {
+        long now = SystemClock.uptimeMillis();
+        long span = now - rateStartAt;
+        int count = rateCount;
+        rateStartAt = now;
+        rateCount = 0;
+        if (span <= 0L || count <= 0) return "节奏 —";
+        return "节奏 " + Math.round(count * 1000f / span) + " 份/秒";
+    }
+
+    /** "p50/p95 age, p50/p95 send cost, paced report rate" — null when nothing was measured yet. */
     public static String takePointerLatencySummary() {
         long[] age;
         int[] cost;
@@ -159,7 +179,8 @@ public final class HidManager {
         java.util.Arrays.sort(cost);
         return "n=" + n
                 + " age p50=" + age[n / 2] + "ms p95=" + age[Math.min(n - 1, (int) (n * 0.95))] + "ms"
-                + " cost p50=" + cost[n / 2] + "ms p95=" + cost[Math.min(n - 1, (int) (n * 0.95))] + "ms";
+                + " cost p50=" + cost[n / 2] + "ms p95=" + cost[Math.min(n - 1, (int) (n * 0.95))] + "ms"
+                + " · " + takeReportRate();
     }
 
     private final AtomicInteger pendDx = new AtomicInteger();
@@ -173,8 +194,19 @@ public final class HidManager {
      */
     private volatile Handler mouseHandler;
     private volatile long lastMouseFlushAt;
-    /** Mouse moves inside this window are merged into one report (≈500 Hz ceiling). */
-    private static final long MOUSE_FLUSH_MS = 2;
+    /** Hard floor for the pacing gap, so a bad pref cannot turn the link into a packet storm. */
+    private static final long MOUSE_GAP_MIN_MS = 1;
+    /**
+     * Minimum gap between two mouse reports — the cadence we pace at.
+     *
+     * <p>A Bluetooth HID interrupt channel runs at roughly one report per 11 ms on Windows and on
+     * most hosts. Pushing 240 Hz bursts at that link only builds a queue inside the Bluetooth
+     * stack: the host keeps receiving stale reports, so the cursor trails behind the finger and
+     * then catches up when the finger stops. Deltas are still accumulated between sends, so
+     * pacing to the link rate loses no movement — it just spends one report per link slot.
+     * Configurable in 更多设置 (2 / 6 / 9 / 12 ms).
+     */
+    public static volatile long mouseGapMs = 9;
     private BluetoothAdapter adapter;
     private BluetoothHidDevice hid;
     private volatile BluetoothDevice host;
@@ -188,6 +220,15 @@ public final class HidManager {
     private volatile boolean everRegistered;
     private int registerGeneration;
     private int reconnectAttempts;
+    /** How many times a dropped link is re-established before we stop and ask the user. */
+    private static final int RECONNECT_MAX = 8;
+    /** Longest backoff between two reconnect attempts. */
+    private static final long RECONNECT_MAX_DELAY_MS = 30_000L;
+    /** Remembers the last host so a cold start (or a status tap) can reconnect without re-pairing. */
+    private static final String PREF_LAST_HOST = "last_host";
+    /** The host the user picked in the device list; we always try to stay on it. */
+    private static final String PREF_PREFERRED_HOST = "preferred_host";
+    private static final long GUARD_COOLDOWN_MS = 15_000L;
     private long lastSendLogAt;
 
     private final BluetoothProfile.ServiceListener proxyListener = new BluetoothProfile.ServiceListener() {
@@ -222,10 +263,20 @@ public final class HidManager {
             reconnectAttempts = 0;
             if (pluggedDevice != null) {
                 host = pluggedDevice;
+                rememberHost(pluggedDevice);
+                rememberMeta(pluggedDevice);
+                if (switchingTo != null && switchingTo.equals(pluggedDevice)) switchingTo = null;
                 post(STATE_CONNECTED, "已连接", nameOf(pluggedDevice));
                 main.postDelayed(HidManager.this::releaseAllInputs, 300);
             } else {
-                post(STATE_WAITING, "等待平板连接", "已注册 HID，请在平板蓝牙中连接手机");
+                // Cold start: if we already know a bonded host, try to pull the link up by ourselves
+                // instead of making the user walk to the tablet's Bluetooth settings every time.
+                BluetoothDevice remembered = lastHostDevice();
+                if (remembered != null && bondStateOf(remembered) == BluetoothDevice.BOND_BONDED) {
+                    scheduleReconnect(remembered);
+                } else {
+                    post(STATE_WAITING, "等待设备连接", "已注册 HID，请在平板 / 电脑的蓝牙中连接手机");
+                }
             }
         }
         @Override public void onConnectionStateChanged(BluetoothDevice device, int newState) {
@@ -233,10 +284,18 @@ public final class HidManager {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 host = device;
                 reconnectAttempts = 0;
+                rememberHost(device);
+                rememberMeta(device);
+                if (switchingTo != null && switchingTo.equals(device)) switchingTo = null;
                 post(STATE_CONNECTED, "已连接", nameOf(device));
                 main.postDelayed(HidManager.this::releaseAllInputs, 300);
+                enforcePreferredHost(device);
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 if (host != null && host.equals(device)) host = null;
+                if (manualDisconnect) {
+                    post(STATE_WAITING, "已断开", "点「切换」连回来");
+                    return;
+                }
                 post(STATE_WAITING, "连接已断开", "自动重连中…");
                 scheduleReconnect(device);
             }
@@ -255,7 +314,12 @@ public final class HidManager {
         }
         @Override public void onVirtualCableUnplug(BluetoothDevice device) {
             Log.i(TAG, "virtual cable unplug " + nameOf(device));
+            rememberHost(device);
             host = null;
+            if (manualDisconnect) {
+                post(STATE_WAITING, "已断开", "点「切换」连回来");
+                return;
+            }
             post(STATE_WAITING, "连接已断开", "自动重连中…");
             scheduleReconnect(device);
         }
@@ -373,27 +437,348 @@ public final class HidManager {
     }
 
     private void scheduleReconnect(final BluetoothDevice device) {
-        if (device == null || !appRegistered || reconnectAttempts >= 3) return;
+        if (device == null || !appRegistered) return;
+        if (manualDisconnect) return;
+        rememberHost(device);
+        if (bondStateOf(device) != BluetoothDevice.BOND_BONDED) {
+            // The host deleted the pairing: no amount of connect() calls can fix that.
+            post(STATE_WAITING, "配对已被删除", "请点右上角「配对」，与平板重新配对一次");
+            return;
+        }
+        if (reconnectAttempts >= RECONNECT_MAX) {
+            post(STATE_WAITING, "连不上平板",
+                    "平板没有响应：确认平板蓝牙已开、就在旁边；或在平板蓝牙里点一下这台手机（点状态文字可重试）");
+            return;
+        }
         reconnectAttempts++;
         final int attempt = reconnectAttempts;
+        final long delay = Math.min(3000L * attempt, RECONNECT_MAX_DELAY_MS);
+        post(STATE_WAITING, "连接已断开", "自动重连中（第 " + attempt + "/" + RECONNECT_MAX + " 次）…");
         main.postDelayed(() -> {
-            BluetoothHidDevice h = hid;
-            if (h == null || !appRegistered || state == STATE_CONNECTED) return;
-            try {
-                Log.i(TAG, "reconnect attempt " + attempt + " -> " + nameOf(device));
-                h.connect(device);
-            } catch (Exception e) {
-                Log.w(TAG, "reconnect failed", e);
-            }
-        }, 2000L * attempt);
+            if (!appRegistered || state == STATE_CONNECTED) return;
+            Log.i(TAG, "reconnect attempt " + attempt + " -> " + nameOf(device));
+            connectDevice(device);
+        }, delay);
     }
 
-    /** Safety net: drop every held key/button after (re)connecting. */
-    private void releaseAllInputs() {
+    /** Status-text tap: forget the backoff and try the remembered host right away. */
+    public void retryConnect() {
+        manualDisconnect = false;
+        reconnectAttempts = 0;
+        BluetoothDevice device = lastHostDevice();
+        if (device != null && bondStateOf(device) == BluetoothDevice.BOND_BONDED) {
+            post(STATE_WAITING, "正在重新连接", nameOf(device));
+            main.postDelayed(() -> connectDevice(device), 250);
+            return;
+        }
+        start();
+    }
+
+    private void connectDevice(BluetoothDevice device) {
+        BluetoothHidDevice h = hid;
+        if (h == null || !appRegistered || state == STATE_CONNECTED) return;
+        try {
+            h.connect(device);
+        } catch (Exception e) {
+            Log.w(TAG, "connect failed", e);
+        }
+    }
+
+    private void rememberHost(BluetoothDevice device) {
+        if (device == null) return;
+        try {
+            String address = device.getAddress();
+            if (address == null) return;
+            context.getSharedPreferences("phonekb", Context.MODE_PRIVATE)
+                    .edit().putString(PREF_LAST_HOST, address).apply();
+        } catch (Exception ignored) { }
+    }
+
+    /** Bonded host remembered from an earlier connection, or null. */
+    private BluetoothDevice lastHostDevice() {
+        BluetoothDevice current = host;
+        if (current != null) return current;
+        try {
+            if (adapter == null) return null;
+            String address = context.getSharedPreferences("phonekb", Context.MODE_PRIVATE)
+                    .getString(PREF_LAST_HOST, null);
+            if (address == null) return null;
+            return adapter.getRemoteDevice(address);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    // ---------------------------------------------------------------- host switching
+
+    /** Set while a manual switch is in flight, so the guard does not fight the user. */
+    private BluetoothDevice switchingTo;
+    private long guardCooldownUntil;
+    /**
+     * The user pressed 「断开」 in the device list. Auto-reconnect, cold-start reconnect and the
+     * prefer-host guard all stand down until the user connects again or the app restarts —
+     * otherwise the link would be back within two seconds and the button would be pointless.
+     */
+    private boolean manualDisconnect;
+
+    public BluetoothDevice currentHost() {
+        return host;
+    }
+
+    public boolean isSwitching() {
+        return switchingTo != null;
+    }
+
+    /** Bonded devices that can act as a HID host, most recently used first. */
+    public java.util.List<BluetoothDevice> bondedHosts() {
+        java.util.ArrayList<BluetoothDevice> out = new java.util.ArrayList<>();
+        try {
+            if (adapter == null) return out;
+            java.util.Set<BluetoothDevice> bonded = adapter.getBondedDevices();
+            if (bonded == null) return out;
+            for (BluetoothDevice d : bonded) {
+                if (d == null || !looksLikeHost(d)) continue;
+                // Computers and phones/tablets can host a Bluetooth keyboard; anything with an unknown
+                // class only shows up once we have actually driven it (that filters out BLE gadgets).
+                if (lastSeen(d) > 0L || isComputer(d) || isPhoneOrTablet(d)) out.add(d);
+            }
+        } catch (Exception ignored) { }
+        java.util.Collections.sort(out, (a, b) -> Long.compare(lastSeen(b), lastSeen(a)));
+        return out;
+    }
+
+    /** Headphones, speakers, watches... can never take a keyboard connection. */
+    private static boolean looksLikeHost(BluetoothDevice d) {
+        try {
+            android.bluetooth.BluetoothClass c = d.getBluetoothClass();
+            if (c == null) return true;
+            int major = c.getDeviceClass() & 0x1F00;
+            return major != android.bluetooth.BluetoothClass.Device.Major.AUDIO_VIDEO
+                    && major != android.bluetooth.BluetoothClass.Device.Major.WEARABLE
+                    && major != android.bluetooth.BluetoothClass.Device.Major.IMAGING
+                    && major != android.bluetooth.BluetoothClass.Device.Major.PERIPHERAL;
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
+    private static boolean isComputer(BluetoothDevice d) {
+        try {
+            android.bluetooth.BluetoothClass c = d.getBluetoothClass();
+            return c != null && (c.getDeviceClass() & 0x1F00)
+                    == android.bluetooth.BluetoothClass.Device.Major.COMPUTER;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static boolean isPhoneOrTablet(BluetoothDevice d) {
+        try {
+            android.bluetooth.BluetoothClass c = d.getBluetoothClass();
+            return c != null && (c.getDeviceClass() & 0x1F00)
+                    == android.bluetooth.BluetoothClass.Device.Major.PHONE;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 1 = 平板 / 手机, 2 = 电脑, 3 = 其他. Remembered type wins over the Bluetooth class. */
+    public static int hostTypeOf(BluetoothDevice d) {
+        int known = d == null ? 3 : rememberedType(d);
+        if (known != 0) return known;
+        try {
+            android.bluetooth.BluetoothClass c = d.getBluetoothClass();
+            if (c == null) return 3;
+            int major = c.getDeviceClass() & 0x1F00;
+            if (major == android.bluetooth.BluetoothClass.Device.Major.COMPUTER) return 2;
+            if (major == android.bluetooth.BluetoothClass.Device.Major.PHONE) return 1;
+            return 3;
+        } catch (Exception e) {
+            return 3;
+        }
+    }
+
+    private static int rememberedType(BluetoothDevice d) {
+        try {
+            HidManager local = instance;
+            String address = d.getAddress();
+            if (local == null || address == null) return 0;
+            return local.prefs().getInt("dev_type_" + address, 0);
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /** Last time this device was connected (wall clock), 0 when unknown. */
+    public long lastSeen(BluetoothDevice d) {
+        try {
+            String address = d.getAddress();
+            if (address == null) return 0L;
+            return prefs().getLong("dev_time_" + address, 0L);
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
+
+    public BluetoothDevice preferredHost() {
+        try {
+            if (adapter == null) return null;
+            String address = prefs().getString(PREF_PREFERRED_HOST, null);
+            if (address == null) return null;
+            return adapter.getRemoteDevice(address);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public void setPreferredHost(BluetoothDevice device) {
+        if (device == null) return;
+        try {
+            String address = device.getAddress();
+            if (address == null) return;
+            prefs().edit().putString(PREF_PREFERRED_HOST, address).apply();
+        } catch (Exception ignored) { }
+    }
+
+    /** 「设备抢连守护」: switch back when another bonded host steals the connection. */
+    public boolean guardEnabled() {
+        return prefs().getBoolean("host_guard", true);
+    }
+
+    public void setGuardEnabled(boolean on) {
+        prefs().edit().putBoolean("host_guard", on).apply();
+    }
+
+    /** True after 「断开」 until the user connects again (never persisted: a restart re-arms auto-connect). */
+    public boolean isManuallyDisconnected() {
+        return manualDisconnect;
+    }
+
+    /**
+     * 「断开」: drop the HID link and stay dropped. Keys are released first so nothing stays pressed on
+     * the host, and every automatic reconnect path is muted until the user picks a device again.
+     */
+    public void disconnectCurrent() {
+        final BluetoothDevice current = host;
+        releaseAllInputs();
+        manualDisconnect = true;
+        switchingTo = null;
+        reconnectAttempts = 0;
+        guardCooldownUntil = SystemClock.uptimeMillis() + 60_000L;
+        host = null;
+        try {
+            if (current != null && hid != null) hid.disconnect(current);
+        } catch (Exception e) {
+            Log.w(TAG, "disconnect failed", e);
+        }
+        post(STATE_WAITING, "已断开", "点「切换」连回来");
+    }
+
+    /**
+     * Manual switch: drop the current host and pull the link up to another bonded one.
+     * Android's HID device profile only holds a single host, so this is disconnect + connect,
+     * not two links at once. No re-pairing is needed as long as both sides kept the bond.
+     */
+    public void switchTo(BluetoothDevice device) {
+        if (device == null) return;
+        if (bondStateOf(device) != BluetoothDevice.BOND_BONDED) {
+            post(STATE_WAITING, "还没配对过", "请点「配对」，和这台设备配对一次");
+            return;
+        }
+        if (hid == null || !appRegistered) {
+            post(STATE_WAITING, "HID 还没注册好", "请稍等一秒再试");
+            return;
+        }
+        releaseAllInputs();
+        manualDisconnect = false;
+        switchingTo = device;
+        reconnectAttempts = 0;
+        setPreferredHost(device);
+        post(STATE_WAITING, "正在切换设备", nameOf(device) + " · 大概 1–2 秒");
+        final BluetoothDevice current = host;
+        try {
+            if (current != null && !current.equals(device)) hid.disconnect(current);
+        } catch (Exception e) {
+            Log.w(TAG, "disconnect before switch failed", e);
+        }
+        main.postDelayed(() -> forceConnect(device, 1), 600);
+    }
+
+    private void forceConnect(final BluetoothDevice device, final int attempt) {
+        if (switchingTo == null || !device.equals(switchingTo)) return;
+        BluetoothHidDevice h = hid;
+        if (h == null || !appRegistered) return;
+        if (host != null && host.equals(device)) {
+            switchingTo = null;
+            return;
+        }
+        try {
+            h.connect(device);
+        } catch (Exception e) {
+            Log.w(TAG, "switch connect failed", e);
+        }
+        if (attempt < 4) {
+            main.postDelayed(() -> forceConnect(device, attempt + 1), 1200);
+        } else {
+            switchingTo = null;
+            guardCooldownUntil = SystemClock.uptimeMillis() + GUARD_COOLDOWN_MS;
+            post(STATE_WAITING, "切换失败", "请在 " + nameOf(device) + " 蓝牙里确认这台手机还在已配对列表中");
+        }
+    }
+
+    /** Guard: if a host that is not the preferred one grabbed the link, hand it back. */
+    private void enforcePreferredHost(final BluetoothDevice connected) {
+        if (manualDisconnect || !guardEnabled() || switchingTo != null) return;
+        if (SystemClock.uptimeMillis() < guardCooldownUntil) return;
+        final BluetoothDevice preferred = preferredHost();
+        if (preferred == null || preferred.equals(connected)) return;
+        if (bondStateOf(preferred) != BluetoothDevice.BOND_BONDED) return;
+        main.postDelayed(() -> {
+            if (switchingTo != null) return;
+            if (host != null && host.equals(connected)) switchTo(preferred);
+        }, 2000);
+    }
+
+    private SharedPreferences prefs() {
+        return context.getSharedPreferences("phonekb", Context.MODE_PRIVATE);
+    }
+
+    private void rememberMeta(BluetoothDevice device) {
+        if (device == null) return;
+        try {
+            String address = device.getAddress();
+            if (address == null) return;
+            prefs().edit()
+                    .putLong("dev_time_" + address, System.currentTimeMillis())
+                    .putInt("dev_type_" + address, hostTypeOf(device))
+                    .apply();
+        } catch (Exception ignored) { }
+    }
+
+    private static int bondStateOf(BluetoothDevice device) {
+        try {
+            return device.getBondState();
+        } catch (SecurityException e) {
+            return BluetoothDevice.BOND_NONE;
+        }
+    }
+
+    /**
+     * Hat value sent when the d-pad is centred. 0x0F is outside the declared logical range 0..7
+     * (null state), which is what Windows/DirectInput expects; some host stacks instead fold the
+     * value modulo 8, so 0x0F becomes 7 = 左上 and the direction looks permanently held. Exposed
+     * as a setting so a host that mis-handles the null state can be worked around without re-pairing.
+     */
+    public static int neutralHat = 0x0F;
+
+    /** Safety net: drop every held key/button after (re)connecting, or when the page loses focus. */
+    public void releaseAllInputs() {
         keyboardRelease();
         mouseButtons(0);
         try {
-            send(HidConstants.REPORT_GAMEPAD, new byte[]{(byte) 0x0F, 0, 0});
+            // Full-length report: the gamepad report is hat(1) + buttons(2) + 4 axes, so a 3-byte
+            // short form leaves the host's axes (and any host that caches the size) at the last value.
+            sendGamepadFull(0, neutralHat, 0, 0, 0, 0);
         } catch (Exception ignored) { }
     }
 
@@ -501,7 +886,7 @@ public final class HidManager {
                 // Button/hat edges go out immediately; only pure stick movement is rate limited,
                 // otherwise a press could wait up to a few ms behind stick frames.
                 int buttons = data.length > 2 ? (data[1] & 0xFF) | ((data[2] & 0xFF) << 8) : 0;
-                int hat = data.length > 0 ? (data[0] & 0x0F) : 0x0F;
+                int hat = data.length > 0 ? (data[0] & 0x0F) : neutralHat;
                 boolean edge = buttons != lastGamepadButtons || hat != lastGamepadHat;
                 if (!edge) {
                     long wait = MIN_GAMEPAD_GAP_MS - (SystemClock.uptimeMillis() - lastGamepadSentAt);
@@ -613,7 +998,9 @@ public final class HidManager {
     public void mouseMove(int dx, int dy, long eventTimeMs) {
         if (dx == 0 && dy == 0) return;
         final long now = SystemClock.uptimeMillis();
-        if (now - lastMouseFlushAt >= MOUSE_FLUSH_MS) {
+        final long gap = Math.max(MOUSE_GAP_MIN_MS, mouseGapMs);
+        MouseStats.lastGap = gap;
+        if (now - lastMouseFlushAt >= gap) {
             // Leading edge: the first move of a burst goes out right away instead of waiting for the
             // merge window, so the pointer starts moving in the same frame the finger does.
             lastMouseFlushAt = now;
@@ -624,7 +1011,8 @@ public final class HidManager {
         pendDy.addAndGet(dy);
         pendEventTime = eventTimeMs;
         if (mouseFlushQueued.compareAndSet(false, true)) {
-            mouseHandler().postDelayed(this::flushMouseMove, MOUSE_FLUSH_MS);
+            mouseHandler().postDelayed(this::flushMouseMove,
+                    Math.max(1L, gap - (now - lastMouseFlushAt)));
         }
     }
 
@@ -671,6 +1059,7 @@ public final class HidManager {
                     dy -= sy;
                 }
                 recordPointerLatency(eventTimeMs, (int) (SystemClock.uptimeMillis() - started));
+                if (timingLog) Log.i(TAG, "mouse ctx=" + (int) MouseStats.lastGap + "ms dx=" + dx0 + " dy=" + dy0);
             } catch (Exception e) {
                 Log.w(TAG, "mouse flush failed", e);
             }
@@ -807,7 +1196,11 @@ public final class HidManager {
         boolean rz = stickAxisRz;
         byte[] r = new byte[rz ? 9 : 7];
         r[0] = (byte) (encodeHat(hat) & 0x0F);
-        int mask = buttonMask(buttons);
+        // The d-pad is expressed with the hat switch only. Its four low bits must never reach the
+        // button field: Windows / DirectInput numbers buttons sequentially, so leaking them lights
+        // 按钮 1–4 while a direction is held, and a single dropped release leaves one stuck on.
+        int mask = buttonMask(buttons & ~(HidConstants.GP_UP | HidConstants.GP_DOWN
+                | HidConstants.GP_LEFT | HidConstants.GP_RIGHT));
         r[1] = (byte) (mask & 0xFF);
         r[2] = (byte) ((mask >> 8) & 0xFF);
         r[3] = (byte) stickLx;
@@ -884,20 +1277,20 @@ public final class HidManager {
         return mask;
     }
 
-    /** Debug helper: sends a raw hat switch value (0-7, 0x0F = centred) with no buttons. */
+    /** Debug helper: sends a raw hat switch value (0-7, neutralHat = centred) with no buttons. */
     public void sendGamepadHat(int hat) {
         byte[] r = new byte[stickAxisRz ? 9 : 7];
         r[0] = (byte) hat;
         send(HidConstants.REPORT_GAMEPAD, r);
     }
 
-    /** Converts the four logical d-pad bits into a HID hat switch value (0x0F = centred). */
+    /** Converts the four logical d-pad bits into a HID hat switch value (neutralHat = centred). */
     private static int hatFromButtons(int buttons) {
         int dx = ((buttons & HidConstants.GP_RIGHT) != 0 ? 1 : 0)
                 - ((buttons & HidConstants.GP_LEFT) != 0 ? 1 : 0);
         int dy = ((buttons & HidConstants.GP_DOWN) != 0 ? 1 : 0)
                 - ((buttons & HidConstants.GP_UP) != 0 ? 1 : 0);
-        if (dx == 0 && dy == 0) return 0x0F;
+        if (dx == 0 && dy == 0) return neutralHat;
         if (dx == 0) return dy > 0 ? 4 : 0;
         if (dy == 0) return dx > 0 ? 2 : 6;
         if (dx > 0) return dy < 0 ? 1 : 3;

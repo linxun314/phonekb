@@ -98,6 +98,8 @@ public class KeyboardView extends View {
     private int latchMods;
     private Key activeKey;
     private Key flashChip;
+    /** PC mode swaps the shortcut chip row for Windows shortcuts (Win / Win+D / Win+Shift+S ...). */
+    private boolean pcMode;
 
     public KeyboardView(Context context, HidManager hid) {
         this(context, hid, false);
@@ -148,6 +150,17 @@ public class KeyboardView extends View {
 
     public int getLayout() {
         return layout;
+    }
+
+    /** PC mode only changes the shortcut chip row of the PC-style layout. */
+    public void setPcMode(boolean enabled) {
+        if (pcMode == enabled) return;
+        pcMode = enabled;
+        rebuild();
+    }
+
+    public boolean isPcMode() {
+        return pcMode;
     }
 
     public void setPage(int newPage) {
@@ -227,11 +240,22 @@ public class KeyboardView extends View {
 
     /** PC-style layout: same keys as before the layout switch existed. */
     private void buildComputerKeys() {
-        chip("Ctrl+C", HidConstants.MOD_LEFT_CTRL, HidConstants.KEY_C);
-        chip("Ctrl+V", HidConstants.MOD_LEFT_CTRL, HidConstants.KEY_V);
-        chip("Ctrl+X", HidConstants.MOD_LEFT_CTRL, HidConstants.KEY_X);
-        chip("Ctrl+A", HidConstants.MOD_LEFT_CTRL, HidConstants.KEY_A);
-        chip("Alt+Tab", HidConstants.MOD_LEFT_ALT, HidConstants.KEY_TAB);
+        if (pcMode) {
+            // Windows shortcuts: the chips a laptop keyboard would give you anyway.
+            chip("Ctrl+C", HidConstants.MOD_LEFT_CTRL, HidConstants.KEY_C);
+            chip("Ctrl+V", HidConstants.MOD_LEFT_CTRL, HidConstants.KEY_V);
+            chip("Win", HidConstants.MOD_LEFT_GUI, 0);
+            chip("Win+D", HidConstants.MOD_LEFT_GUI, HidConstants.KEY_D);
+            chip("Alt+Tab", HidConstants.MOD_LEFT_ALT, HidConstants.KEY_TAB);
+            chip("截屏", HidConstants.MOD_LEFT_GUI | HidConstants.MOD_LEFT_SHIFT, HidConstants.KEY_S);
+            chip("锁屏", HidConstants.MOD_LEFT_GUI, HidConstants.KEY_L);
+        } else {
+            chip("Ctrl+C", HidConstants.MOD_LEFT_CTRL, HidConstants.KEY_C);
+            chip("Ctrl+V", HidConstants.MOD_LEFT_CTRL, HidConstants.KEY_V);
+            chip("Ctrl+X", HidConstants.MOD_LEFT_CTRL, HidConstants.KEY_X);
+            chip("Ctrl+A", HidConstants.MOD_LEFT_CTRL, HidConstants.KEY_A);
+            chip("Alt+Tab", HidConstants.MOD_LEFT_ALT, HidConstants.KEY_TAB);
+        }
 
         List<Key> r1 = new ArrayList<>();
         for (int i = 0; i < 10; i++) r1.add(key(String.valueOf((i + 1) % 10), HidConstants.KEY_1 + i));

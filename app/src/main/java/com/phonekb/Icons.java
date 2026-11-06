@@ -28,6 +28,10 @@ public final class Icons {
     public static final int SCREENSHOT = 17;
     public static final int SUN_UP = 18;
     public static final int SUN_DOWN = 19;
+    public static final int DEV_PHONE = 20;
+    public static final int DEV_PC = 21;
+    public static final int DEV_TV = 22;
+    public static final int CHEVRON_DOWN = 23;
 
     /** Draws one icon centered inside the given box, using the paint's color. */
     public static void draw(Canvas canvas, int icon, RectF box, Paint fillPaint) {
@@ -206,6 +210,32 @@ public final class Icons {
                 canvas.drawLine(cx, cy - 0.36f * s, cx, cy + 0.34f * s, stroke);
                 canvas.drawLine(cx - 0.26f * s, cy + 0.08f * s, cx, cy + 0.34f * s, stroke);
                 canvas.drawLine(cx + 0.26f * s, cy + 0.08f * s, cx, cy + 0.34f * s, stroke);
+                break;
+            }
+            case DEV_PHONE: {
+                canvas.drawRoundRect(new RectF(cx - 0.30f * s, cy - 0.46f * s,
+                        cx + 0.30f * s, cy + 0.46f * s), 0.10f * s, 0.10f * s, stroke);
+                canvas.drawLine(cx - 0.10f * s, cy + 0.33f * s, cx + 0.10f * s, cy + 0.33f * s, stroke);
+                break;
+            }
+            case DEV_PC: {
+                canvas.drawRoundRect(new RectF(cx - 0.46f * s, cy - 0.44f * s,
+                        cx + 0.46f * s, cy + 0.16f * s), 0.09f * s, 0.09f * s, stroke);
+                canvas.drawLine(cx, cy + 0.16f * s, cx, cy + 0.42f * s, stroke);
+                canvas.drawLine(cx - 0.22f * s, cy + 0.42f * s, cx + 0.22f * s, cy + 0.42f * s, stroke);
+                break;
+            }
+            case DEV_TV: {
+                canvas.drawRoundRect(new RectF(cx - 0.46f * s, cy - 0.42f * s,
+                        cx + 0.46f * s, cy + 0.26f * s), 0.11f * s, 0.11f * s, stroke);
+                canvas.drawLine(cx - 0.40f * s, cy + 0.44f * s, cx + 0.40f * s, cy + 0.44f * s, stroke);
+                break;
+            }
+            case CHEVRON_DOWN: {
+                path.moveTo(cx - 0.32f * s, cy - 0.15f * s);
+                path.lineTo(cx, cy + 0.17f * s);
+                path.lineTo(cx + 0.32f * s, cy - 0.15f * s);
+                canvas.drawPath(path, stroke);
                 break;
             }
             default:

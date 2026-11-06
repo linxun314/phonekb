@@ -33,6 +33,7 @@ public final class PointerSettings {
     private static final String KEY_MEDIA_BOOST = "media_boost";
     private static final String KEY_LT_COMPAT = "gp_lt_compat";
     private static final String KEY_BOOST_POINT = "media_boost_point";
+    private static final String KEY_REPORT_MS = "ptr_report_ms";
 
     private static float speed = SPEED_DEFAULT;
     private static int rows = ROWS_DEFAULT;
@@ -45,6 +46,11 @@ public final class PointerSettings {
     private static boolean ltCompat = false;
     private static int boostPoint = 1;
     private static boolean loaded;
+    /** Mouse report cadence in ms (see HidManager#mouseGapMs). */
+    public static final int REPORT_MIN = 2;
+    public static final int REPORT_MAX = 12;
+    public static final int REPORT_DEFAULT = 9;
+    private static int reportMs = REPORT_DEFAULT;
 
     /** Rewind / fast-forward keys hold down the real consumer key (players keep seeking). */
     public static final int MEDIA_HOLD_SEEK = 0;
@@ -73,6 +79,7 @@ public final class PointerSettings {
         mediaBoost = p.getBoolean(KEY_MEDIA_BOOST, true);
         ltCompat = p.getBoolean(KEY_LT_COMPAT, false);
         boostPoint = clampPoint(p.getInt(KEY_BOOST_POINT, 1));
+        reportMs = clampReport(p.getInt(KEY_REPORT_MS, REPORT_DEFAULT));
     }
 
     public static float speed() {
@@ -81,6 +88,22 @@ public final class PointerSettings {
 
     public static int rows() {
         return rows;
+    }
+
+    /** Mouse report cadence in ms: smaller = snappier, larger = fewer reports on the link. */
+    public static int reportMs() {
+        return reportMs;
+    }
+
+    public static void setReportMs(Context context, int value) {
+        reportMs = clampReport(value);
+        prefs(context).edit().putInt(KEY_REPORT_MS, reportMs).apply();
+    }
+
+    private static int clampReport(int value) {
+        if (value < REPORT_MIN) return REPORT_MIN;
+        if (value > REPORT_MAX) return REPORT_MAX;
+        return value;
     }
 
     public static boolean accel() {

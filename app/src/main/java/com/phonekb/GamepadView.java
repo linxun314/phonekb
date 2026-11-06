@@ -71,7 +71,15 @@ public final class GamepadView extends View {
     private static final int MOUSE_RIGHT = 2;
     private static final long TAP_MAX_MS = 220;
 
-    private static final int HAT_NEUTRAL = 0x0F;
+    /** Centred hat value; see {@link HidManager#neutralHat} — configurable in 更多设置. */
+    private static int HAT_NEUTRAL = 0x0F;
+
+    /** Applies the host-compatibility choice for the centred hat value. */
+    public static void setNeutralHat(int value) {
+        if (value < 0 || value > 0x0F) return;
+        HAT_NEUTRAL = value;
+        HidManager.neutralHat = value;
+    }
     /**
      * A tap shorter than this can slip between two host polls, so the host only ever sees the
      * key as already released. The button bit is held slightly longer instead of dropping the tap.
@@ -526,6 +534,28 @@ public final class GamepadView extends View {
         tpAccumX = 0f;
         tpAccumY = 0f;
         tpScrollAcc = 0f;
+    }
+
+    /**
+     * Drop every held button / stick / hat and tell the host. Called when the page is hidden, the
+     * activity pauses or the device disconnects — otherwise the host keeps the last "pressed" state
+     * forever (Windows shows the button lit until something else is sent).
+     */
+    public void releaseAll() {
+        resetInput();
+        invalidate();
+    }
+
+    @Override
+    protected void onVisibilityChanged(View changedView, int visibility) {
+        super.onVisibilityChanged(changedView, visibility);
+        if (visibility != VISIBLE) releaseAll();
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        releaseAll();
+        super.onDetachedFromWindow();
     }
 
     private void resetInput() {

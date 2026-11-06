@@ -174,7 +174,7 @@ public final class SensitivityDialog {
         });
 
         TextView note = new TextView(ctx);
-        note.setText("对触控板页 / 单手遥控台 / 触控板浮层 / 手柄页触控区同时生效，设置会记住。");
+        note.setText("对触控板页 / 触控板浮层 / 手柄页触控区同时生效，设置会记住。");
         note.setTextColor(Ui.TEXT_DIM);
         note.setTextSize(10);
         note.setPadding(0, dpi(ctx, land ? 6 : 10), 0, 0);
