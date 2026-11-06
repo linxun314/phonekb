@@ -186,6 +186,14 @@ public final class HidManager {
     private boolean proxyRequested;
     private volatile boolean appRegistered;
     private volatile boolean everRegistered;
+    /**
+     * Apple (iPad) mode: publish a single plain boot-keyboard collection instead of the composite
+     * keyboard / mouse / consumer / gamepad device. On by default in the iPad build; the composite
+     * device stays available for Android tablets and desktops.
+     */
+    private volatile boolean appleMode = true;
+    /** Last LED output report the host sent (bit 1 = CapsLock). */
+    private volatile int appleLedState;
     private int registerGeneration;
     private int reconnectAttempts;
     private long lastSendLogAt;
@@ -248,6 +256,11 @@ public final class HidManager {
             } catch (Exception ignored) { }
         }
         @Override public void onSetReport(BluetoothDevice device, byte type, byte id, byte[] data) {
+            if (data != null && data.length > 0) {
+                // LED output report: bit 0 NumLock, bit 1 CapsLock, bit 2 ScrollLock.
+                appleLedState = data[0] & 0xFF;
+                Log.i(TAG, "led 0x" + Integer.toHexString(appleLedState));
+            }
             try {
                 BluetoothHidDevice d = hid;
                 if (d != null) d.replyReport(device, type, id, data == null ? new byte[0] : data);
@@ -335,10 +348,17 @@ public final class HidManager {
     private void registerApp() {
         if (hid == null) return;
         try {
+            // Apple mode: a plain boot keyboard SDP record (minor device class 0x40 = keyboard)
+            // with a single-collection descriptor. Composite devices with several report ids are
+            // what iPadOS appears to reject.
             BluetoothHidDeviceAppSdpSettings sdp = new BluetoothHidDeviceAppSdpSettings(
-                    "PhoneKB", "Phone as Bluetooth keyboard", "PhoneKB",
-                    (byte) 0, stickAxisRz ? HidConstants.REPORT_DESCRIPTOR_RZ
-                            : HidConstants.REPORT_DESCRIPTOR);
+                    "PhoneKB",
+                    appleMode ? "PhoneKB Bluetooth keyboard" : "Phone as Bluetooth keyboard",
+                    "PhoneKB",
+                    appleMode ? (byte) 0x40 : (byte) 0,
+                    appleMode ? HidConstants.DESCRIPTOR_APPLE_BOOT_KEYBOARD
+                            : (stickAxisRz ? HidConstants.REPORT_DESCRIPTOR_RZ
+                            : HidConstants.REPORT_DESCRIPTOR));
             final int generation = ++registerGeneration;
             boolean ok = hid.registerApp(sdp, null, null, btExecutor, callback);
             Log.i(TAG, "registerApp ok=" + ok);
@@ -428,6 +448,11 @@ public final class HidManager {
     }
 
     private boolean send(int reportId, byte[] data) {
+        if (appleMode && reportId != HidConstants.APPLE_KEYBOARD_REPORT_ID) {
+            // Apple/boot mode publishes one keyboard collection only; mouse / media / gamepad
+            // reports would be an unknown report id for the host, so drop them instead.
+            return false;
+        }
         BluetoothDevice d = host;
         BluetoothHidDevice h = hid;
         if (d == null || h == null || state != STATE_CONNECTED) {
@@ -559,6 +584,12 @@ public final class HidManager {
     // ---------------------------------------------------------------- keyboard
 
     public boolean keyboardPress(int modifiers, int usage) {
+        if (appleMode) {
+            byte[] r = new byte[HidConstants.APPLE_KEYBOARD_REPORT_LEN];
+            r[0] = (byte) modifiers;
+            r[2] = (byte) usage;
+            return send(HidConstants.APPLE_KEYBOARD_REPORT_ID, r);
+        }
         byte[] r = new byte[2];
         r[0] = (byte) modifiers;
         r[1] = (byte) usage;
@@ -566,6 +597,11 @@ public final class HidManager {
     }
 
     public void keyboardRelease() {
+        if (appleMode) {
+            send(HidConstants.APPLE_KEYBOARD_REPORT_ID,
+                    new byte[HidConstants.APPLE_KEYBOARD_REPORT_LEN]);
+            return;
+        }
         send(HidConstants.REPORT_KEYBOARD, new byte[2]);
     }
 
@@ -768,6 +804,26 @@ public final class HidManager {
         r[1] = (byte) ((usage >> 8) & 0xFF);
         send(HidConstants.REPORT_CONSUMER, r);
         main.postDelayed(() -> send(HidConstants.REPORT_CONSUMER, new byte[2]), 35);
+    }
+
+    // ------------------------------------------------------------- Apple / iPad mode
+
+    public boolean isAppleMode() {
+        return appleMode;
+    }
+
+    /**
+     * Switch between the plain Apple boot keyboard and the composite device. The descriptor is part
+     * of the SDP record that gets cached by the host at pairing time, so a change only takes effect
+     * after the app registers again and the host forgets the old device.
+     */
+    public void setAppleMode(boolean enabled) {
+        appleMode = enabled;
+    }
+
+    /** Last LED output report the host sent (bit 1 = CapsLock); proves the host accepts our reports. */
+    public int appleLedState() {
+        return appleLedState;
     }
 
     // ----------------------------------------------------------------- gamepad

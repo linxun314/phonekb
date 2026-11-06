@@ -2,6 +2,9 @@ package com.phonekb.pad;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.bluetooth.BluetoothAdapter;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
@@ -14,11 +17,13 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
 /** PhoneKB Pad：给 iPad 当蓝牙键盘 / 触控板 / 媒体键。 */
 public class MainActivity extends Activity implements HidManager.Listener {
 
     private static final int REQ_PERM = 101;
+    private static final int REQ_DISCOVERABLE = 102;
     private static final String[] TAB_NAMES = new String[]{"键盘", "触控板", "媒体"};
 
     private HidManager hid;
@@ -107,6 +112,32 @@ public class MainActivity extends Activity implements HidManager.Listener {
 
         head.addView(statusBox, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
+        // An Android phone is only discoverable for pairing on demand, so the iPad can never find
+        // it without this. Same 5-minute window the main app uses.
+        TextView pairButton = new TextView(this);
+        pairButton.setText("配对");
+        pairButton.setTextSize(13f);
+        pairButton.setTextColor(PadStyle.ACCENT);
+        pairButton.setGravity(Gravity.CENTER);
+        int ppx = (int) PadStyle.dp(12f);
+        int ppy = (int) PadStyle.dp(6f);
+        pairButton.setPadding(ppx, ppy, ppx, ppy);
+        GradientDrawable pairBg = new GradientDrawable();
+        pairBg.setCornerRadius(PadStyle.dp(14f));
+        pairBg.setColor(PadStyle.SURFACE);
+        pairBg.setStroke((int) PadStyle.dp(1.2f), PadStyle.ACCENT);
+        pairButton.setBackground(pairBg);
+        pairButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                onPairClicked();
+            }
+        });
+        LinearLayout.LayoutParams pairLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        pairLp.rightMargin = (int) PadStyle.dp(6f);
+        head.addView(pairButton, pairLp);
+
         LinearLayout tabBar = new LinearLayout(this);
         tabBar.setOrientation(LinearLayout.HORIZONTAL);
         for (int i = 0; i < 3; i++) {
@@ -141,7 +172,7 @@ public class MainActivity extends Activity implements HidManager.Listener {
         root.addView(content, contentLp);
 
         TextView footer = new TextView(this);
-        footer.setText("PhoneKB Pad 0.1.0 \u00B7 蓝牙 HID \u00B7 键盘 / 触控板 / 媒体（iPad 版）");
+        footer.setText("PhoneKB Pad 0.2.0 \u00B7 iPad 测试包：只发标准蓝牙键盘报文，触控板 / 媒体键不发送");
         footer.setTextSize(10f);
         footer.setTextColor(PadStyle.TEXT_DIM);
         footer.setGravity(Gravity.CENTER);
@@ -203,6 +234,46 @@ public class MainActivity extends Activity implements HidManager.Listener {
                 statusDot.setTextColor(color);
             }
         });
+    }
+
+    private void onPairClicked() {
+        if (hid != null && hid.isConnected()) {
+            toast("已连接 \u00B7 直接在 iPad 上打字就行");
+            return;
+        }
+        try {
+            Intent discoverable = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
+            discoverable.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300);
+            startActivityForResult(discoverable, REQ_DISCOVERABLE);
+        } catch (Exception e) {
+            toast("无法开启蓝牙可发现模式");
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_DISCOVERABLE) {
+            if (resultCode > 0) showPairingDialog();
+            else toast("手机未开启可发现，无法配对");
+        }
+    }
+
+    private void showPairingDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle("在 iPad 上配对手机")
+                .setMessage("1. 手机现在可被蓝牙搜索 5 分钟（设备名就是手机蓝牙名）\n"
+                        + "2. iPad 打开 设置 \u2192 蓝牙，先在旧记录上点「忽略此设备」\n"
+                        + "3. 在「其他设备」里点这台手机的名字\n"
+                        + "4. 两端确认配对码后，手机顶部会显示「已连接」\n\n"
+                        + "然后打开 iPad 备忘录直接打字：软键盘应该收起，字能出来、退格能用。\n"
+                        + "这个测试包只发标准蓝牙键盘报文，触控板和媒体键不会发送。")
+                .setPositiveButton("知道了", null)
+                .show();
+    }
+
+    private void toast(String text) {
+        Toast.makeText(this, text, Toast.LENGTH_SHORT).show();
     }
 
     private TextView pill(String text) {

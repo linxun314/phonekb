@@ -8,6 +8,7 @@ const PORT = 8000;
 
 const files = {
   "/PhoneKB.apk": "PhoneKB.apk",
+  "/PhoneKB-Pad-iPad-test.apk": "PhoneKB-Pad-iPad-test.apk",
 };
 
 http.createServer((req, res) => {
@@ -30,6 +31,7 @@ http.createServer((req, res) => {
     '<body style="font-family:sans-serif;background:#0f1115;color:#e9ecf2;padding:24px">' +
     '<h2>PhoneKB 下载</h2>' +
     '<p><a style="color:#4c8dff;font-size:18px" href="/PhoneKB.apk">下载 PhoneKB（手机用）</a></p>' +
+    '<p><a style="color:#4c8dff;font-size:18px" href="/PhoneKB-Pad-iPad-test.apk">下载 PhoneKB Pad iPad 测试包</a></p>' +
     '<p style="color:#98a1b3">安装时系统可能提示「未知来源」，允许即可。</p>' +
     '</body>');
 }).listen(PORT, "0.0.0.0", () => console.log("PhoneKB apk server on http://0.0.0.0:" + PORT));

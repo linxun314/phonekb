@@ -1,7 +1,7 @@
 param(
     [switch]$Clean,
-    [string]$VersionName = "0.1.0",
-    [int]$VersionCode = 1
+    [string]$VersionName = "0.2.0",
+    [int]$VersionCode = 2
 )
 # Builds the iPad-oriented app (separate module, separate package).
 #   app-pad -> build\PhoneKB-Pad.apk

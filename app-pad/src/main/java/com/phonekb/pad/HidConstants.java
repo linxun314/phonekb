@@ -127,6 +127,36 @@ public final class HidConstants {
             "81 42 95 01 75 04 81 03 05 09 19 01 29 10 15 00 25 01 95 10 75 01 81 02" +
             AXES_6);
 
+    // ------------------------------------------------------------ iPad / Apple mode
+
+    /**
+     * Plain Bluetooth "boot keyboard" descriptor: ONE collection, no report ids, an 8-byte input
+     * report ([modifiers, reserved, key1..key6]) and a 1-byte LED output report.
+     *
+     * <p>iOS / iPadOS is known to ignore HID devices that publish a composite device with several
+     * collections and report ids, while a plain boot keyboard is exactly what a real Bluetooth
+     * keyboard publishes. Hosts cache the descriptor from pairing, so a descriptor change only takes
+     * effect after the iPad forgets the device and pairs again.
+     */
+    public static final byte[] DESCRIPTOR_APPLE_BOOT_KEYBOARD = hex(
+            // Usage Page (Generic Desktop), Usage (Keyboard), Collection (Application)
+            "05 01 09 06 A1 01" +
+            // Modifier keys: 8 x 1 bit
+            "05 07 19 E0 29 E7 15 00 25 01 75 01 95 08 81 02" +
+            // Reserved byte
+            "95 01 75 08 81 01" +
+            // 6 key codes (6KRO), 8 bits each
+            "95 06 75 08 15 00 25 65 05 07 19 00 29 65 81 00" +
+            // LED output report: 5 LEDs + 3 bits of padding
+            "05 08 19 01 29 05 95 05 75 01 91 02" +
+            "95 01 75 03 91 01" +
+            "C0");
+
+    /** Apple/boot mode publishes no report ids, so every report goes out as report id 0. */
+    public static final int APPLE_KEYBOARD_REPORT_ID = 0;
+    /** Apple/boot mode input report length: modifiers + reserved + 6 key codes. */
+    public static final int APPLE_KEYBOARD_REPORT_LEN = 8;
+
     private static byte[] hex(String s) {
         String compact = s.replace(" ", "").replace("\n", "").replace("\r", "");
         byte[] out = new byte[compact.length() / 2];
