@@ -32,6 +32,8 @@ public final class SensitivityDialog {
         final int originalRows = PointerSettings.rows();
         final boolean originalAccel = PointerSettings.accel();
         final int originalScrollHold = PointerSettings.scrollHoldMs();
+        final int originalStripStep = PointerSettings.stripStepDp();
+        final boolean originalStripFling = PointerSettings.stripFling();
 
         final Dialog dialog = new Dialog(ctx);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
@@ -168,6 +170,26 @@ public final class SensitivityDialog {
                 });
         addRow(box, ctx, "上下键按住滚动（慢 = 一格一格挪）", holdRow[0], land, land ? 8 : 14);
 
+        // 滚轮条（v0.39.2）：手指按在右边箭头条上上下拖，就能像鼠标滚轮那样连续滚。
+        final LinearLayout[] stripRow = new LinearLayout[1];
+        stripRow[0] = segment(ctx, new String[]{"慢", "中", "快"}, stripIndex(PointerSettings.stripStepDp()),
+                which -> {
+                    PointerSettings.setStripStepDp(ctx, which == 0 ? PointerSettings.STRIP_STEP_SLOW
+                            : (which == 1 ? PointerSettings.STRIP_STEP_MID : PointerSettings.STRIP_STEP_FAST));
+                    styleSegments(stripRow[0], which);
+                    if (onChanged != null) onChanged.run();
+                });
+        addRow(box, ctx, "滚轮条灵敏度（手指拖多远滚一格）", stripRow[0], land, land ? 8 : 14);
+
+        final LinearLayout[] stripFlingRow = new LinearLayout[1];
+        stripFlingRow[0] = segment(ctx, new String[]{"关", "开"},
+                PointerSettings.stripFling() ? 1 : 0, which -> {
+                    PointerSettings.setStripFling(ctx, which == 1);
+                    refreshStripFling(stripFlingRow[0], which);
+                    if (onChanged != null) onChanged.run();
+                });
+        addRow(box, ctx, "滚轮条抬手惯性（甩一下再滑几格）", stripFlingRow[0], land, land ? 8 : 14);
+
         speedBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
@@ -201,6 +223,8 @@ public final class SensitivityDialog {
             PointerSettings.setRows(ctx, originalRows);
             PointerSettings.setAccel(ctx, originalAccel);
             PointerSettings.setScrollHoldMs(ctx, originalScrollHold);
+            PointerSettings.setStripStepDp(ctx, originalStripStep);
+            PointerSettings.setStripFling(ctx, originalStripFling);
             if (onChanged != null) onChanged.run();
             dialog.dismiss();
         });
@@ -230,6 +254,7 @@ public final class SensitivityDialog {
 
         refreshSpeed(ctx, speedValue, hint, presetRow[0]);
         refreshAccel(accelRow[0], PointerSettings.accel() ? 0 : 1);
+        refreshStripFling(stripFlingRow[0], PointerSettings.stripFling() ? 1 : 0);
 
         Window window = dialog.getWindow();
         if (window != null) {
@@ -265,6 +290,19 @@ public final class SensitivityDialog {
         int dFast = Math.abs(ms - PointerSettings.SCROLL_HOLD_FAST);
         if (dSlow <= dMid && dSlow <= dFast) return 0;
         return dMid <= dFast ? 1 : 2;
+    }
+
+    /** 0 = 慢 / 1 = 中 / 2 = 快，取最接近的那一档。 */
+    private static int stripIndex(int stepDp) {
+        int dSlow = Math.abs(stepDp - PointerSettings.STRIP_STEP_SLOW);
+        int dMid = Math.abs(stepDp - PointerSettings.STRIP_STEP_MID);
+        int dFast = Math.abs(stepDp - PointerSettings.STRIP_STEP_FAST);
+        if (dSlow <= dMid && dSlow <= dFast) return 0;
+        return dMid <= dFast ? 1 : 2;
+    }
+
+    private static void refreshStripFling(LinearLayout row, int active) {
+        styleSegments(row, active);
     }
 
     private static void refreshAccel(LinearLayout row, int active) {

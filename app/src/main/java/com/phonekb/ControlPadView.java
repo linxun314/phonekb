@@ -6,6 +6,7 @@ import android.graphics.Paint;
 import android.graphics.RectF;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
@@ -67,6 +68,8 @@ public class ControlPadView extends View {
     private final RectF padRect = new RectF();
     private final RectF scrollUpRect = new RectF();
     private final RectF scrollDownRect = new RectF();
+    /** 两颗箭头键 + 中间的缝 = 一整条「滚轮条」（v0.39.2）。 */
+    private final RectF stripRect = new RectF();
     private final RectF backRect = new RectF();
     private final RectF homeRect = new RectF();
     private final RectF recentsRect = new RectF();
@@ -78,6 +81,8 @@ public class ControlPadView extends View {
     private final Paint gestOnPaint;
     private final Paint gestOffPaint;
     private final Paint middleTextPaint;
+    private final Paint stripRailPaint = Ui.fill(0x33FFFFFF);
+    private final Paint stripRailOnPaint = Ui.fill(Ui.ACCENT);
 
     private final float margin;
     private final float gap;
@@ -87,6 +92,17 @@ public class ControlPadView extends View {
     private int pressedKey = -1;
     private int scrollDir;
     private boolean padActive;
+    // 滚轮条状态（v0.39.2）：按住不动 = 慢速连滚，上下拖动 = 跟手滚轮。
+    private boolean stripDown;
+    private boolean stripDragged;
+    private float stripLastY;
+    private float stripAcc;
+    private float stripVel;
+    private long stripLastAt;
+    private float stripTouchY;
+    private int stripTicks;
+    private int flingDir;
+    private int flingLeft;
 
     /** Hold cadence is user-configurable (慢 180 / 中 120 / 快 70 ms), see PointerSettings. */
     private final Runnable scrollRepeat = new Runnable() {
@@ -96,6 +112,17 @@ public class ControlPadView extends View {
                 hid.mouseWheel(scrollDir);
                 handler.postDelayed(this, PointerSettings.scrollHoldMs());
             }
+        }
+    };
+
+    /** 快速甩一下后的惯性：再补几格滚轮（可选，默认关）。 */
+    private final Runnable stripFlingRun = new Runnable() {
+        @Override
+        public void run() {
+            if (flingLeft <= 0) return;
+            flingLeft--;
+            hid.mouseWheel(flingDir);
+            if (flingLeft > 0) handler.postDelayed(this, 45);
         }
     };
 
@@ -183,6 +210,9 @@ public class ControlPadView extends View {
         pad.setPadBounds(padRect);
         scrollUpRect.set(padRect.right + gap, margin, margin + contentW, margin + (mainH - gap) / 2f);
         scrollDownRect.set(scrollUpRect.left, scrollUpRect.bottom + gap, scrollUpRect.right, margin + mainH);
+        // 两颗箭头 + 中间那道缝，合成一条连续的滚轮条。
+        stripRect.set(scrollUpRect);
+        stripRect.union(scrollDownRect);
         updateSensChip();
 
         float navTop = margin + mainH + gap;
@@ -239,6 +269,7 @@ public class ControlPadView extends View {
         drawKey(canvas, scrollDownRect, pressedKey == PRESS_SCROLL_DOWN);
         drawArrow(canvas, scrollUpRect, Icons.UP_ARROW, icon);
         drawArrow(canvas, scrollDownRect, Icons.DOWN_ARROW, icon);
+        drawStripRail(canvas);
 
         drawKey(canvas, backRect, pressedKey == PRESS_BACK);
         drawKey(canvas, homeRect, pressedKey == PRESS_HOME);
@@ -337,21 +368,119 @@ public class ControlPadView extends View {
         performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
     }
 
-    private void startScroll(int dir) {
-        scrollDir = dir;
-        pressedKey = dir > 0 ? PRESS_SCROLL_UP : PRESS_SCROLL_DOWN;
-        haptic();
+    /**
+     * 滚轮条按下（v0.39.2）：立刻发一格（点一下 = 一格，和以前一样），同时预备「按住不动
+     * 就慢速连滚」；手指一旦上下拖动就切成跟手滚轮，并取消连滚。
+     *
+     * @param tapDir 点一下要发哪一格（上半区 = +1 往上，下半区 = -1 往下）
+     */
+    private void beginStrip(float y, int tapDir) {
         PointerSettings.init(getContext());
-        hid.mouseWheel(dir);
+        handler.removeCallbacks(stripFlingRun);
+        flingLeft = 0;
+        stripDown = true;
+        stripDragged = false;
+        stripAcc = 0f;
+        stripVel = 0f;
+        stripTicks = 0;
+        stripLastY = y;
+        stripTouchY = y;
+        stripLastAt = SystemClock.uptimeMillis();
+        scrollDir = tapDir;
+        pressedKey = tapDir > 0 ? PRESS_SCROLL_UP : PRESS_SCROLL_DOWN;
+        haptic();
+        hid.mouseWheel(tapDir);
         handler.removeCallbacks(scrollRepeat);
         // 第一次重复稍微等一会儿：先把「点一下」和「按住」区分开，再进入连续慢速滚动
         handler.postDelayed(scrollRepeat, 150);
         invalidate();
     }
 
-    private void stopScroll() {
+    /** 滚轮条拖动：手指每走 stripStepDp 就发一格滚轮。 */
+    private void moveStrip(float y) {
+        long now = SystemClock.uptimeMillis();
+        float dt = Math.max(1f, now - stripLastAt);
+        float dy = y - stripLastY;
+        stripVel = stripVel * 0.6f + (dy / dt) * 0.4f;
+        stripLastY = y;
+        stripLastAt = now;
+        stripTouchY = y;
+        float step = Ui.dp(getContext(), PointerSettings.stripStepDp());
+        if (step <= 0f) return;
+        stripAcc -= dy; // 手指往上走记为正
+        int steps = 0;
+        while (stripAcc >= step) {
+            steps++;
+            stripAcc -= step;
+        }
+        while (stripAcc <= -step) {
+            steps--;
+            stripAcc += step;
+        }
+        if (steps == 0) {
+            invalidate();
+            return;
+        }
+        if (!stripDragged) {
+            stripDragged = true;
+            handler.removeCallbacks(scrollRepeat);
+            scrollDir = 0;
+        }
+        int dir = steps > 0 ? 1 : -1;
+        pressedKey = dir > 0 ? PRESS_SCROLL_UP : PRESS_SCROLL_DOWN;
+        hid.mouseWheel(PadGestures.natural() ? -steps : steps);
+        stripTicks += Math.abs(steps);
+        if (stripTicks >= 3) {
+            stripTicks = 0;
+            haptic();
+        }
+        invalidate();
+    }
+
+    /** 抬手：停连滚；开了惯性且是快速甩动时，再补几格。 */
+    private void endStrip(boolean allowFling) {
         handler.removeCallbacks(scrollRepeat);
+        boolean wasDown = stripDown;
+        stripDown = false;
         scrollDir = 0;
+        pressedKey = -1;
+        if (wasDown && allowFling && stripDragged && stripVel != 0f) {
+            startStripFling(stripVel);
+        }
+        stripVel = 0f;
+        stripDragged = false;
+        invalidate();
+    }
+
+    private void startStripFling(float vel) {
+        if (!PointerSettings.stripFling()) return;
+        float dp = Math.max(0.5f, Ui.dp(getContext(), 1f));
+        float dpPerMs = Math.abs(vel) / dp;
+        int ticks = Math.round(dpPerMs * 4f);
+        if (ticks <= 0) return;
+        if (ticks > 4) ticks = 4;
+        // 手指往下 = moveStrip 里的负方向，滚轮方向跟它保持一致。
+        int dir = vel > 0f ? -1 : 1;
+        flingDir = PadGestures.natural() ? -dir : dir;
+        flingLeft = ticks;
+        handler.removeCallbacks(stripFlingRun);
+        handler.postDelayed(stripFlingRun, 40);
+    }
+
+    /** 两颗箭头之间那条细轨：拖动时整条变蓝，让「这里能拖」看得出来。 */
+    private void drawStripRail(Canvas canvas) {
+        if (stripRect.isEmpty()) return;
+        boolean active = stripDown;
+        float railW = Ui.dp(getContext(), 3f);
+        RectF rail = new RectF(stripRect.centerX() - railW / 2f, stripRect.top + Ui.dp(getContext(), 10),
+                stripRect.centerX() + railW / 2f, stripRect.bottom - Ui.dp(getContext(), 10));
+        float radius = railW / 2f;
+        canvas.drawRoundRect(rail, radius, radius, active ? stripRailOnPaint : stripRailPaint);
+        if (active) {
+            float dotR = Ui.dp(getContext(), 4f);
+            float cy = Math.max(rail.top, Math.min(rail.bottom, stripTouchY));
+            canvas.drawCircle(rail.centerX(), cy, dotR, stripRailOnPaint);
+        }
     }
 
     private void resetPressed() {
@@ -411,12 +540,9 @@ public class ControlPadView extends View {
                             android.widget.Toast.LENGTH_SHORT).show();
                     return true;
                 }
-                if (scrollUpRect.contains(x, y)) {
-                    startScroll(1);
-                    return true;
-                }
-                if (scrollDownRect.contains(x, y)) {
-                    startScroll(-1);
+                if (!stripRect.isEmpty() && stripRect.contains(x, y)) {
+                    // 点上半区 = 上一格，下半区 = 下一格；接着上下拖就是跟手滚轮。
+                    beginStrip(y, y < stripRect.centerY() ? 1 : -1);
                     return true;
                 }
                 if (backRect.contains(x, y)) {
@@ -468,13 +594,9 @@ public class ControlPadView extends View {
             case MotionEvent.ACTION_POINTER_UP:
             case MotionEvent.ACTION_MOVE: {
                 if (padActive) return pad.onTouch(e);
-                if (scrollDir != 0 && e.getActionMasked() == MotionEvent.ACTION_MOVE) {
-                    float x = e.getX();
-                    float y = e.getY();
-                    if (!scrollUpRect.contains(x, y) && !scrollDownRect.contains(x, y)) {
-                        stopScroll();
-                        resetPressed();
-                    }
+                if (stripDown) {
+                    moveStrip(e.getY());
+                    return true;
                 }
                 return true;
             }
@@ -486,7 +608,7 @@ public class ControlPadView extends View {
                     resetPressed();
                     return handled;
                 }
-                stopScroll();
+                endStrip(e.getActionMasked() == MotionEvent.ACTION_UP);
                 resetPressed();
                 return true;
             }

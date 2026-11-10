@@ -26,6 +26,17 @@ public final class PointerSettings {
     public static final int SCROLL_HOLD_MAX = 300;
     public static final int SCROLL_HOLD_DEFAULT = SCROLL_HOLD_SLOW;
 
+    /**
+     * 「滚轮条」：手指按在右侧箭头条上上下拖动，每拖这么远（dp）发一格滚轮。
+     * 数值越大越慢、越细腻；越小越"灵敏"。
+     */
+    public static final int STRIP_STEP_SLOW = 24;
+    public static final int STRIP_STEP_MID = 16;
+    public static final int STRIP_STEP_FAST = 10;
+    public static final int STRIP_STEP_MIN = 6;
+    public static final int STRIP_STEP_MAX = 40;
+    public static final int STRIP_STEP_DEFAULT = STRIP_STEP_MID;
+
     public static final int LONG_PRESS_MIN = 250;
     public static final int LONG_PRESS_MAX = 600;
     public static final int LONG_PRESS_DEFAULT = 350;
@@ -43,6 +54,8 @@ public final class PointerSettings {
     private static final String KEY_BOOST_POINT = "media_boost_point";
     private static final String KEY_REPORT_MS = "ptr_report_ms";
     private static final String KEY_SCROLL_HOLD = "ptr_scroll_hold";
+    private static final String KEY_STRIP_STEP = "ptr_strip_step";
+    private static final String KEY_STRIP_FLING = "ptr_strip_fling";
 
     private static float speed = SPEED_DEFAULT;
     private static int rows = ROWS_DEFAULT;
@@ -61,6 +74,8 @@ public final class PointerSettings {
     public static final int REPORT_DEFAULT = 9;
     private static int reportMs = REPORT_DEFAULT;
     private static int scrollHoldMs = SCROLL_HOLD_DEFAULT;
+    private static int stripStepDp = STRIP_STEP_DEFAULT;
+    private static boolean stripFling = false;
 
     /** Rewind / fast-forward keys hold down the real consumer key (players keep seeking). */
     public static final int MEDIA_HOLD_SEEK = 0;
@@ -91,11 +106,41 @@ public final class PointerSettings {
         boostPoint = clampPoint(p.getInt(KEY_BOOST_POINT, 1));
         reportMs = clampReport(p.getInt(KEY_REPORT_MS, REPORT_DEFAULT));
         scrollHoldMs = clampScrollHold(p.getInt(KEY_SCROLL_HOLD, SCROLL_HOLD_DEFAULT));
+        stripStepDp = clampStripStep(p.getInt(KEY_STRIP_STEP, STRIP_STEP_DEFAULT));
+        stripFling = p.getBoolean(KEY_STRIP_FLING, false);
     }
 
     /** How often (ms) the up / down scroll keys repeat while held down. */
     public static int scrollHoldMs() {
         return scrollHoldMs;
+    }
+
+    /** Finger travel (dp) per wheel notch on the scroll strip. */
+    public static int stripStepDp() {
+        return stripStepDp;
+    }
+
+    public static void setStripStepDp(Context context, int value) {
+        init(context);
+        stripStepDp = clampStripStep(value);
+        prefs(context).edit().putInt(KEY_STRIP_STEP, stripStepDp).apply();
+    }
+
+    /** True = a fast flick on the strip keeps coasting for a couple of notches. */
+    public static boolean stripFling() {
+        return stripFling;
+    }
+
+    public static void setStripFling(Context context, boolean value) {
+        init(context);
+        stripFling = value;
+        prefs(context).edit().putBoolean(KEY_STRIP_FLING, value).apply();
+    }
+
+    public static int clampStripStep(int value) {
+        if (value < STRIP_STEP_MIN) return STRIP_STEP_MIN;
+        if (value > STRIP_STEP_MAX) return STRIP_STEP_MAX;
+        return value;
     }
 
     public static void setScrollHoldMs(Context context, int value) {
