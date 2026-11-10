@@ -88,12 +88,13 @@ public class ControlPadView extends View {
     private int scrollDir;
     private boolean padActive;
 
+    /** Hold cadence is user-configurable (慢 180 / 中 120 / 快 70 ms), see PointerSettings. */
     private final Runnable scrollRepeat = new Runnable() {
         @Override
         public void run() {
             if (scrollDir != 0) {
                 hid.mouseWheel(scrollDir);
-                handler.postDelayed(this, 70);
+                handler.postDelayed(this, PointerSettings.scrollHoldMs());
             }
         }
     };
@@ -340,8 +341,10 @@ public class ControlPadView extends View {
         scrollDir = dir;
         pressedKey = dir > 0 ? PRESS_SCROLL_UP : PRESS_SCROLL_DOWN;
         haptic();
+        PointerSettings.init(getContext());
         hid.mouseWheel(dir);
         handler.removeCallbacks(scrollRepeat);
+        // 第一次重复稍微等一会儿：先把「点一下」和「按住」区分开，再进入连续慢速滚动
         handler.postDelayed(scrollRepeat, 150);
         invalidate();
     }

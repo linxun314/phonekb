@@ -290,7 +290,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         footer = new TextView(this);
-        footer.setText("PhoneKB v0.39.0 · 蓝牙 HID · 平板 / 电脑 · 键盘 / 触控板 / 媒体 / 手柄");
+        footer.setText("PhoneKB v0.39.1 · 蓝牙 HID · 平板 / 电脑 · 键盘 / 触控板 / 媒体 / 手柄");
         footer.setTextColor(Ui.TEXT_DIM);
         footer.setTextSize(11);
         footer.setGravity(Gravity.CENTER);
@@ -2235,6 +2235,11 @@ public class MainActivity extends Activity {
         // Debug/test hook: open the gesture settings dialog so it can be screenshotted.
         if (intent.getIntExtra("pgdlg", 0) == 1) {
             new Handler(Looper.getMainLooper()).postDelayed(this::showGestureDialog, 1600);
+        }
+        // Debug/test hook: open the pointer sensitivity dialog (speed / wheel rows / hold cadence).
+        if (intent.getIntExtra("sensdlg", 0) == 1) {
+            new Handler(Looper.getMainLooper()).postDelayed(
+                    () -> SensitivityDialog.show(this, this::refreshPads), 1600);
         }
         // Debug/test hook: the floating touch pad overlay (adb cannot tap it) and its offset.
         if (gamepadView != null && intent.hasExtra("gptp")) {

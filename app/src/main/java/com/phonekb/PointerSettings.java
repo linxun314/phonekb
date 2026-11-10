@@ -18,6 +18,14 @@ public final class PointerSettings {
     public static final int ROWS_MAX = 6;
     public static final int ROWS_DEFAULT = 3;
 
+    /** Hold cadence (ms per wheel notch) of the trackpad-side up / down scroll keys. */
+    public static final int SCROLL_HOLD_SLOW = 180;
+    public static final int SCROLL_HOLD_MID = 120;
+    public static final int SCROLL_HOLD_FAST = 70;
+    public static final int SCROLL_HOLD_MIN = 50;
+    public static final int SCROLL_HOLD_MAX = 300;
+    public static final int SCROLL_HOLD_DEFAULT = SCROLL_HOLD_SLOW;
+
     public static final int LONG_PRESS_MIN = 250;
     public static final int LONG_PRESS_MAX = 600;
     public static final int LONG_PRESS_DEFAULT = 350;
@@ -34,6 +42,7 @@ public final class PointerSettings {
     private static final String KEY_LT_COMPAT = "gp_lt_compat";
     private static final String KEY_BOOST_POINT = "media_boost_point";
     private static final String KEY_REPORT_MS = "ptr_report_ms";
+    private static final String KEY_SCROLL_HOLD = "ptr_scroll_hold";
 
     private static float speed = SPEED_DEFAULT;
     private static int rows = ROWS_DEFAULT;
@@ -51,6 +60,7 @@ public final class PointerSettings {
     public static final int REPORT_MAX = 12;
     public static final int REPORT_DEFAULT = 9;
     private static int reportMs = REPORT_DEFAULT;
+    private static int scrollHoldMs = SCROLL_HOLD_DEFAULT;
 
     /** Rewind / fast-forward keys hold down the real consumer key (players keep seeking). */
     public static final int MEDIA_HOLD_SEEK = 0;
@@ -80,6 +90,24 @@ public final class PointerSettings {
         ltCompat = p.getBoolean(KEY_LT_COMPAT, false);
         boostPoint = clampPoint(p.getInt(KEY_BOOST_POINT, 1));
         reportMs = clampReport(p.getInt(KEY_REPORT_MS, REPORT_DEFAULT));
+        scrollHoldMs = clampScrollHold(p.getInt(KEY_SCROLL_HOLD, SCROLL_HOLD_DEFAULT));
+    }
+
+    /** How often (ms) the up / down scroll keys repeat while held down. */
+    public static int scrollHoldMs() {
+        return scrollHoldMs;
+    }
+
+    public static void setScrollHoldMs(Context context, int value) {
+        init(context);
+        scrollHoldMs = clampScrollHold(value);
+        prefs(context).edit().putInt(KEY_SCROLL_HOLD, scrollHoldMs).apply();
+    }
+
+    public static int clampScrollHold(int value) {
+        if (value < SCROLL_HOLD_MIN) return SCROLL_HOLD_MIN;
+        if (value > SCROLL_HOLD_MAX) return SCROLL_HOLD_MAX;
+        return value;
     }
 
     public static float speed() {

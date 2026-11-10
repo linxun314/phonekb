@@ -31,6 +31,7 @@ public final class SensitivityDialog {
         final float originalSpeed = PointerSettings.speed();
         final int originalRows = PointerSettings.rows();
         final boolean originalAccel = PointerSettings.accel();
+        final int originalScrollHold = PointerSettings.scrollHoldMs();
 
         final Dialog dialog = new Dialog(ctx);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
@@ -156,6 +157,17 @@ public final class SensitivityDialog {
         });
         box.addView(rowsBar);
 
+        // 触控板右侧 ↑ / ↓ 按住时的重复节奏：慢档一格一格挪，快档接近旧版本
+        final LinearLayout[] holdRow = new LinearLayout[1];
+        holdRow[0] = segment(ctx, new String[]{"慢", "中", "快"}, holdIndex(PointerSettings.scrollHoldMs()),
+                which -> {
+                    PointerSettings.setScrollHoldMs(ctx, which == 0 ? PointerSettings.SCROLL_HOLD_SLOW
+                            : (which == 1 ? PointerSettings.SCROLL_HOLD_MID : PointerSettings.SCROLL_HOLD_FAST));
+                    styleSegments(holdRow[0], which);
+                    if (onChanged != null) onChanged.run();
+                });
+        addRow(box, ctx, "上下键按住滚动（慢 = 一格一格挪）", holdRow[0], land, land ? 8 : 14);
+
         speedBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
@@ -188,6 +200,7 @@ public final class SensitivityDialog {
             PointerSettings.setSpeed(ctx, originalSpeed);
             PointerSettings.setRows(ctx, originalRows);
             PointerSettings.setAccel(ctx, originalAccel);
+            PointerSettings.setScrollHoldMs(ctx, originalScrollHold);
             if (onChanged != null) onChanged.run();
             dialog.dismiss();
         });
@@ -243,6 +256,15 @@ public final class SensitivityDialog {
                     : (Math.abs(speed - 1.0f) < 0.06f ? 1 : (Math.abs(speed - 1.6f) < 0.06f ? 2 : -1));
             styleSegments(presets, active);
         }
+    }
+
+    /** 0 = 慢 / 1 = 中 / 2 = 快，取最接近的那一档。 */
+    private static int holdIndex(int ms) {
+        int dSlow = Math.abs(ms - PointerSettings.SCROLL_HOLD_SLOW);
+        int dMid = Math.abs(ms - PointerSettings.SCROLL_HOLD_MID);
+        int dFast = Math.abs(ms - PointerSettings.SCROLL_HOLD_FAST);
+        if (dSlow <= dMid && dSlow <= dFast) return 0;
+        return dMid <= dFast ? 1 : 2;
     }
 
     private static void refreshAccel(LinearLayout row, int active) {
