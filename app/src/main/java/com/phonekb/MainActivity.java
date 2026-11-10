@@ -1337,6 +1337,7 @@ public class MainActivity extends Activity {
                         + "常用键卡是 2 行 × 5 列的圆形大键：第一排 音量+ / 音量− / 静音 / 截屏 / 多任务，第二排 亮度− / 亮度+ / 返回 / 主页 / 菜单。截屏发的是蓝牙键盘的 PrintScreen 键，Android 会直接截屏；多任务发 Alt+Tab（系统「切换应用」快捷键）。\n\n"
                         + "「帮助 → 更多设置」里可以调：指针点击方式（抬手点击 / 按下即点）、长按拖拽阈值（250 / 350 / 450 ms）、极速模式（少震动、移动中不重绘，更跟手）、界面大小，以及指针延迟测量。\n\n"
                         + "手柄：左上的「移动盘」按钮打开设置，里有三个段：「布局」可选 浮键 / 皮肤；「移动盘类型」按键 / 圆盘 / 摇杆；「移动盘大小」「按键大小」两个 60%–150% 滑块（只缩放按键本身）。浮键＝现在这套：左下方向盘、右下 X/Y/A/B、两侧中段 L1/R1、菜单键在顶部条；皮肤＝整机手柄外观：圆角机身 + 十字键圆环 + ABXY 圆环 + LB/LT/RB/RT + 左右 L/R 模拟摇杆（摇杆是 4 个轴，换新版后平板要「忘记设备→重新配对」一次才会识别）+ 居中的 SELECT/START。自定义位置：在设置里点「编辑布局·拖动按键改位置」，或者在手柄页空白处按住 3 秒，进入编辑模式后每个键出现蓝虚线框，单指拖动即可挪位置，松手自动保存；顶部有「重置 / 完成」，横屏和竖屏各存一套。「触控」小键一键切换 关 / 中间 / 全屏：中间＝页面正中一块看得见边界的触控板；全屏＝除按键外整片空白都能触控。触控板手势和「触控板」页一致：单指移动、轻点＝左键、双指点击＝右键、双指上下滑＝滚动；「只移动」档位下只移指针不点击。浮键布局下也有一行四个肩键：L1 / LT（左）与 RT / R1（右），皮肤布局则是 LB/LT/RB/RT；如果老游戏只认 L1/R1、不认 LT/RT，可以在「帮助 → 更多设置 → 手柄 LT / RT 兼容」打开，让 LT/RT 同时发 L1/R1。移动盘类型选「摇杆」时，整块圆盘都能按、摇杆头跟手，推的是左摇杆 X/Y 模拟轴；只有当游戏只认方向键时才把「摇杆同时发方向键」打开（打开后左上斜向会退化成左）。\n\n"
+                        + "按键映射：手柄设置里点「按键映射 · 每个键改成别的功能」，列出的 14 个键（方向键、A/B/X/Y、L1/R1/LT/RT、SELECT/START）都能改成别的东西——点一行，再从「不发送 / 手柄按键 / 方向键 / 键盘键 / 鼠标左中右 / 媒体键」里挑一个目标。某个游戏不认手柄的某个键时最有用：把那个键改成「键盘 空格」或「鼠标 左键」，游戏里立刻就能用。三套配置（配置 1/2/3）可以给不同游戏，切换立即生效并记住；「恢复默认」只重置当前这套。下面的「面键布局」Xbox / PS / Switch 只换按键上印的字和 A/B、X/Y 的位置（Switch 习惯把 A 和 B、X 和 Y 对调），跟映射改的「实际发什么」互不冲突。\n\n"
                         + "手柄页触控板浮层：右上角的「触控板」小键点一下，右侧浮出一块触控板浮层（单指移动、轻点＝左键、双指点击＝右键、双指滑＝滚动），右下角竖排是 返回 / 主页 / 后台。点浮层外面的任何地方就会收起，左半屏的方向盘和 ABXY 照样能按；再点一次「触控板」收起。浮层左上角有个「⇔」把手：按住约 0.3 秒后左右拖动可以挪动整块浮层的位置，松手就记住，下次打开还在那儿。\n\n"
                         + "电脑上玩只认 Xbox 手柄的游戏（奥日、大多数 3A）：Windows 只把手机当「通用 HID 游戏控制器」（DirectInput），而这类游戏只列 XInput 设备，所以游戏里根本找不到这个手柄——不是按键没发出去，是两套协议不同，蓝牙 HID 没法伪装成 Xbox 手柄。用 Steam 中转就行：Steam → 设置 → 控制器 → 打开「通用手柄配置支持」，在「通用手柄 → 测试设备」里按几下手机上的键确认 Steam 收到了；进游戏前右键游戏 → 属性 → 控制器 →「启用 Steam 输入」，Steam 会把它虚拟成 Xbox 手柄。非 Steam 游戏先「添加非 Steam 游戏到我的库」，同样有效；手边有真 Xbox 手柄时，玩奥日这类游戏直接用真手柄最省事。\n\n"
                         + "双手模式：左边是触控板，右边是按键板（从上到下：音量、媒体、返回 / 主页 / 后台、数字 / 键盘），左右手各管一半。双手页顶部有「互换」键：点一下把触控区和按键区对调（横屏左右对调，竖屏上下对调），方便左右手习惯不同的人；互换状态会记住。\n\n"
@@ -2021,6 +2022,17 @@ public class MainActivity extends Activity {
         }
         if (gamepadView != null && intent.getIntExtra("gpdialog", 0) == 1) {
             contentFrame.postDelayed(gamepadView::showSettingsDialog, 700);
+        }
+        // Debug/test hook: 1 = 按键映射 dialog, 2 = the target picker of the A button, 3 = self test.
+        // A main-looper Handler is used on purpose: --ei orient recreates the activity and a
+        // View.postDelayed callback on the old view hierarchy would never run.
+        final int gpmap = intent.getIntExtra("gpmap", 0);
+        if (gamepadView != null && gpmap != 0) {
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                if (gpmap == 1) gamepadView.showMappingDialog();
+                else if (gpmap == 2) gamepadView.debugShowTargetPicker(HidConstants.GP_A);
+                else if (gpmap == 3) gamepadView.debugMappingSelfTest();
+            }, 1600);
         }
         // Debug/test hook: the floating touch pad overlay (adb cannot tap it) and its offset.
         if (gamepadView != null && intent.hasExtra("gptp")) {

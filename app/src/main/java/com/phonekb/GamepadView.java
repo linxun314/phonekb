@@ -94,7 +94,8 @@ public final class GamepadView extends View {
         final int bit;
         final int kind;
         final int labelColor;
-        final String label;
+        /** Face buttons change their printed letter when the layout (Xbox / PS / Switch) changes. */
+        String label;
         int fill;
         boolean pressed;
         float radius;
@@ -138,7 +139,16 @@ public final class GamepadView extends View {
 
     private final Btn[] all = {up, down, left, right, l1, r1, l2, r2, x, y, a, b, select, start};
     private final Map<Integer, Btn> pointers = new HashMap<>();
+    /** Gamepad buttons sent to the host, i.e. after the per-key mapping. */
     private int mask;
+    /** D-pad directions sent through the hat switch (also after the mapping). */
+    private int dirMask;
+    /** Mouse buttons currently held by a key that is mapped to the mouse. */
+    private int mouseMask;
+    /** Physical key that currently drives the keyboard report (only one HID key fits in a report). */
+    private Btn keyBtn;
+    /** Physical key that currently drives the consumer (media) report. */
+    private Btn consumerBtn;
     private final RectF chipRect = new RectF();
     private final RectF discRect = new RectF();
 
@@ -307,6 +317,8 @@ public final class GamepadView extends View {
         discStroke.setStrokeWidth(dp(1.2f));
         edgePaint.setStyle(Paint.Style.STROKE);
         edgePaint.setStrokeWidth(dp(1.2f));
+        GamepadMap.init(c);
+        applyFaceLabels();
     }
 
     private float dp(float v) {
@@ -562,6 +574,19 @@ public final class GamepadView extends View {
         resetTouchPad();
         pointers.clear();
         mask = 0;
+        dirMask = 0;
+        if (mouseMask != 0) {
+            mouseMask = 0;
+            if (hid != null) hid.mouseButtons(0);
+        }
+        if (keyBtn != null) {
+            keyBtn = null;
+            if (hid != null) hid.keyboardRelease();
+        }
+        if (consumerBtn != null) {
+            consumerBtn = null;
+            if (hid != null) hid.consumerUp();
+        }
         for (Btn btn : all) btn.pressed = false;
         if (discPointer != -1) {
             discPointer = -1;
@@ -1463,7 +1488,7 @@ public final class GamepadView extends View {
         btn.releasePending = false;
         if (countPointers(btn) > 0 || !btn.pressed) return;
         btn.pressed = false;
-        mask &= ~btn.bit;
+        applyRelease(btn);
         invalidate();
         send();
     }
@@ -2298,7 +2323,7 @@ public final class GamepadView extends View {
                     btn.pressed = true;
                     btn.releasePending = false;
                     btn.downAt = SystemClock.uptimeMillis();
-                    mask |= btn.bit;
+                    applyPress(btn);
                     // Report first: haptics/drawing cost 2-5 ms and used to delay the key itself.
                     send();
                     invalidate();
@@ -2474,6 +2499,17 @@ public final class GamepadView extends View {
         if (action == MotionEvent.ACTION_CANCEL) {
             pointers.clear();
             mask = 0;
+            dirMask = 0;
+            if (mouseMask != 0) {
+                mouseMask = 0;
+                if (hid != null) hid.mouseButtons(0);
+            }
+            keyBtn = null;
+            consumerBtn = null;
+            if (hid != null) {
+                hid.keyboardRelease();
+                hid.consumerUp();
+            }
             for (Btn btn : all) btn.pressed = false;
             if (discPointer != -1) {
                 discPointer = -1;
@@ -2711,7 +2747,7 @@ public final class GamepadView extends View {
     private void send() {
         if (hid == null) return;
         int hat = padType == PAD_DISC ? discHat
-                : (padType == PAD_STICK ? padStickHat : hatFromMask(mask));
+                : (padType == PAD_STICK ? padStickHat : hatFromMask(dirMask));
         int out = mask;
         if (PointerSettings.ltCompat()) {
             // Hosts/games that only map BTN_TL / BTN_TR ignore the trigger buttons 9 and 10.
@@ -2734,6 +2770,417 @@ public final class GamepadView extends View {
         if (dy == 0) return dx > 0 ? 2 : 6;
         if (dx > 0) return dy < 0 ? 1 : 3;
         return dy > 0 ? 5 : 7;
+    }
+
+
+    // --------------------------------------------------------------- mapping
+
+    /** Applies the per-key mapping of one physical key press (gamepad / keyboard / mouse / media). */
+    private void applyPress(Btn btn) {
+        GamepadMap.Target t = GamepadMap.target(btn.bit);
+        if (t.type == GamepadMap.T_GAME) {
+            if (GamepadMap.isDirection(t)) dirMask |= t.value;
+            else mask |= t.value;
+            return;
+        }
+        if (t.type == GamepadMap.T_KEY) {
+            // Only one key code fits into a HID keyboard report, so remember which key owns it.
+            keyBtn = btn;
+            if (hid != null) hid.keyboardPress(t.mod, t.value);
+            return;
+        }
+        if (t.type == GamepadMap.T_MOUSE) {
+            mouseMask |= t.value;
+            if (hid != null) hid.mouseButtons(mouseMask);
+            return;
+        }
+        if (t.type == GamepadMap.T_CONSUMER) {
+            consumerBtn = btn;
+            if (hid != null) hid.consumerDown(t.value);
+        }
+    }
+
+    /** Applies the release of one physical key, handing the keyboard/media report to a still-held key. */
+    private void applyRelease(Btn btn) {
+        GamepadMap.Target t = GamepadMap.target(btn.bit);
+        if (t.type == GamepadMap.T_GAME) {
+            if (GamepadMap.isDirection(t)) dirMask &= ~t.value;
+            else mask &= ~t.value;
+            return;
+        }
+        if (t.type == GamepadMap.T_KEY) {
+            if (keyBtn == btn) {
+                // Hand the one key code slot to another held key before falling back to "no key".
+                Btn next = nextHeld(GamepadMap.T_KEY, btn);
+                keyBtn = next;
+                if (hid != null) {
+                    if (next == null) hid.keyboardRelease();
+                    else {
+                        GamepadMap.Target nt = GamepadMap.target(next.bit);
+                        hid.keyboardPress(nt.mod, nt.value);
+                    }
+                }
+            }
+            return;
+        }
+        if (t.type == GamepadMap.T_MOUSE) {
+            mouseMask &= ~t.value;
+            if (hid != null) hid.mouseButtons(mouseMask);
+            return;
+        }
+        if (t.type == GamepadMap.T_CONSUMER) {
+            if (consumerBtn == btn) {
+                Btn next = nextHeld(GamepadMap.T_CONSUMER, btn);
+                consumerBtn = next;
+                if (hid != null) {
+                    if (next == null) hid.consumerUp();
+                    else hid.consumerDown(GamepadMap.target(next.bit).value);
+                }
+            }
+        }
+    }
+
+    /** Another still-pressed physical key whose target is of the given type. */
+    private Btn nextHeld(int type, Btn except) {
+        for (Btn b : all) {
+            if (b == except || !b.pressed) continue;
+            if (GamepadMap.target(b.bit).type == type) return b;
+        }
+        return null;
+    }
+
+    /** Re-reads the face button labels after the layout (Xbox / PS / Switch) or a mapping changed. */
+    private void applyFaceLabels() {
+        x.label = GamepadMap.faceLabel(HidConstants.GP_X);
+        y.label = GamepadMap.faceLabel(HidConstants.GP_Y);
+        a.label = GamepadMap.faceLabel(HidConstants.GP_A);
+        b.label = GamepadMap.faceLabel(HidConstants.GP_B);
+        invalidate();
+    }
+
+    /** Re-opens the mapping after the dialog changed something. */
+    private void onMappingChanged() {
+        applyFaceLabels();
+        // Targets of held keys may have changed; drop everything so the host is not left with a
+        // stuck key or button.
+        if (hid != null) {
+            hid.keyboardRelease();
+            hid.consumerUp();
+            hid.mouseButtons(0);
+        }
+        keyBtn = null;
+        consumerBtn = null;
+        mouseMask = 0;
+        releaseAll();
+    }
+
+    /** 「按键映射」 dialog: physical key list, one target picker row per key, 3 slots + face layout. */
+    public void showMappingDialog() {
+        final Context ctx = getContext();
+        final Dialog dialog = new Dialog(ctx);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        dialog.setCanceledOnTouchOutside(true);
+        final boolean land = getResources().getConfiguration().orientation
+                == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
+
+        LinearLayout root = new LinearLayout(ctx);
+        root.setOrientation(LinearLayout.VERTICAL);
+
+        TextView title = new TextView(ctx);
+        title.setText("按键映射");
+        title.setTextColor(Ui.TEXT);
+        title.setTextSize(17);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
+
+        TextView sub = new TextView(ctx);
+        sub.setText("点一行选「哪个键」，再选「发什么」。三套配置可以给不同游戏用。");
+        sub.setTextColor(Ui.TEXT_DIM);
+        sub.setTextSize(11.5f);
+        sub.setLineSpacing(dpi(2), 1f);
+        sub.setPadding(0, dpi(5), 0, dpi(10));
+
+        // Slot row: 配置 1 / 2 / 3
+        TextView slotLabel = settingsLabel(ctx, "当前配置（三套可以给不同游戏用）");
+        slotLabel.setPadding(0, dpi(2), 0, dpi(6));
+        root.addView(slotLabel);
+        LinearLayout slotRow = segment(ctx, new String[]{"配置 1", "配置 2", "配置 3"},
+                GamepadMap.slot(), which -> {
+                    GamepadMap.setSlot(ctx, which);
+                    onMappingChanged();
+                    dialog.dismiss();
+                    showMappingDialog();
+                });
+        root.addView(slotRow);
+
+        // Face layout row: Xbox / PS / Switch
+        TextView faceTitle = settingsLabel(ctx, "面键布局");
+        faceTitle.setPadding(0, dpi(12), 0, dpi(6));
+        root.addView(faceTitle);
+        LinearLayout faceRow = segment(ctx, GamepadMap.FACE_NAMES, GamepadMap.faceLayout(), which -> {
+            GamepadMap.setFaceLayout(ctx, which);
+            onMappingChanged();
+            dialog.dismiss();
+            showMappingDialog();
+        });
+        root.addView(faceRow);
+
+        TextView hint = new TextView(ctx);
+        hint.setText("面键布局只换印字和 A/B、X/Y 的位置（Switch 习惯）；下面的映射改的是这个键实际发什么，两件事互不冲突。");
+        hint.setTextColor(Ui.TEXT_DIM);
+        hint.setTextSize(10.5f);
+        hint.setLineSpacing(dpi(2), 1f);
+        hint.setPadding(0, dpi(6), 0, dpi(14));
+        root.addView(hint);
+
+        // One row per physical key.
+        for (int i = 0; i < GamepadMap.PHYS.length; i++) {
+            final int bit = GamepadMap.PHYS[i];
+            GamepadMap.Target t = GamepadMap.target(bit);
+            LinearLayout row = new LinearLayout(ctx);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dpi(12), dpi(9), dpi(12), dpi(9));
+            row.setBackground(Ui.rounded(ctx, Ui.SURFACE_2, 10));
+            row.setClickable(true);
+            row.setOnClickListener(v -> {
+                dialog.dismiss();
+                showTargetPicker(bit);
+            });
+
+            TextView name = new TextView(ctx);
+            name.setText(GamepadMap.physName(bit));
+            name.setTextColor(Ui.TEXT);
+            name.setTextSize(12.5f);
+            name.setSingleLine(true);
+            name.setIncludeFontPadding(false);
+            row.addView(name, new LinearLayout.LayoutParams(0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+            TextView value = new TextView(ctx);
+            value.setText(t.label);
+            value.setTextColor(GamepadMap.isDefault(bit) ? Ui.TEXT_DIM : Ui.ACCENT);
+            value.setTextSize(12f);
+            value.setSingleLine(true);
+            value.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            value.setIncludeFontPadding(false);
+            value.setGravity(Gravity.END);
+            value.setMaxWidth(dpi(150));
+            row.addView(value, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT));
+
+            LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            rowLp.topMargin = dpi(4);
+            root.addView(row, rowLp);
+        }
+
+        // Bottom buttons: 恢复默认 / 关闭
+        LinearLayout bottom = new LinearLayout(ctx);
+        bottom.setOrientation(LinearLayout.HORIZONTAL);
+        bottom.setPadding(0, dpi(12), 0, 0);
+        TextView reset = new TextView(ctx);
+        reset.setText("恢复默认");
+        reset.setTextColor(Ui.TEXT);
+        reset.setTextSize(12.5f);
+        reset.setGravity(Gravity.CENTER);
+        reset.setPadding(0, dpi(10), 0, dpi(10));
+        reset.setBackground(Ui.rounded(ctx, Ui.SURFACE_2, 12));
+        reset.setOnClickListener(v -> {
+            GamepadMap.resetCurrentSlot(ctx);
+            onMappingChanged();
+            dialog.dismiss();
+            showMappingDialog();
+        });
+        LinearLayout.LayoutParams resetLp = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        resetLp.rightMargin = dpi(10);
+        bottom.addView(reset, resetLp);
+
+        TextView close = new TextView(ctx);
+        close.setText("关闭");
+        close.setTextColor(Ui.ACCENT);
+        close.setTextSize(12.5f);
+        close.setGravity(Gravity.CENTER);
+        close.setPadding(0, dpi(10), 0, dpi(10));
+        close.setBackground(Ui.roundedStroke(ctx, Ui.SURFACE_2, Ui.ACCENT, 1.2f, 12));
+        close.setOnClickListener(v -> dialog.dismiss());
+        bottom.addView(close, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        // Same structure as the settings dialog: the whole list scrolls, the buttons stay pinned.
+        // Landscape is only ~393dp tall, so the window is bounded and the content scrolls.
+        LinearLayout box = new LinearLayout(ctx);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.addView(title);
+        box.addView(sub);
+        box.addView(root);
+        ScrollView scroll = new ScrollView(ctx);
+        scroll.setFillViewport(false);
+        scroll.addView(box);
+        LinearLayout outer = new LinearLayout(ctx);
+        outer.setOrientation(LinearLayout.VERTICAL);
+        outer.setBackground(Ui.rounded(ctx, Ui.SURFACE, 18));
+        outer.setPadding(dpi(18), dpi(16), dpi(18), dpi(12));
+        outer.addView(scroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        outer.addView(bottom);
+        dialog.setContentView(outer);
+        Window w = dialog.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            w.setDimAmount(0.5f);
+            w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            WindowManager.LayoutParams lp = new WindowManager.LayoutParams();
+            lp.copyFrom(w.getAttributes());
+            lp.width = dpi(land ? 392 : 330);
+            int screenH = getResources().getDisplayMetrics().heightPixels;
+            lp.height = land ? Math.round(screenH * 0.86f) : WindowManager.LayoutParams.WRAP_CONTENT;
+            w.setAttributes(lp);
+        }
+        dialog.show();
+    }
+
+    /**
+     * Debug helper: remaps the B button to the space bar, presses and releases it, then restores the
+     * default mapping. Used by adb to prove the mapping path really emits key reports.
+     */
+    public void debugMappingSelfTest() {
+        final Context ctx = getContext();
+        final int spaceId = 18; // 「空格」 in GamepadMap.TARGETS
+        final int before = GamepadMap.targetId(HidConstants.GP_B);
+        GamepadMap.setTarget(ctx, HidConstants.GP_B, spaceId);
+        applyFaceLabels();
+        android.util.Log.i("PhoneKB-GP", "map: B -> " + GamepadMap.target(HidConstants.GP_B).label
+                + " (was id " + before + ")");
+        b.pressed = true;
+        applyPress(b);
+        send();
+        postDelayed(() -> {
+            b.pressed = false;
+            applyRelease(b);
+            send();
+            android.util.Log.i("PhoneKB-GP", "map: released, mask=" + mask + " dir=" + dirMask);
+            GamepadMap.setTarget(ctx, HidConstants.GP_B, before);
+            applyFaceLabels();
+        }, 260);
+    }
+
+    private boolean land() {
+        return getResources().getConfiguration().orientation
+                == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
+    }
+
+    /** Debug helper: opens the target picker for one physical key (adb cannot tap the dialog). */
+    public void debugShowTargetPicker(int physBit) {
+        showTargetPicker(physBit);
+    }
+
+    /** Second step: pick what the given physical key should send. */
+    private void showTargetPicker(final int physBit) {
+        final Context ctx = getContext();
+        final Dialog dialog = new Dialog(ctx);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        dialog.setCanceledOnTouchOutside(true);
+
+        LinearLayout root = new LinearLayout(ctx);
+        root.setOrientation(LinearLayout.VERTICAL);
+
+        TextView title = new TextView(ctx);
+        title.setText(GamepadMap.physName(physBit) + " 发送");
+        title.setTextColor(Ui.TEXT);
+        title.setTextSize(16);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
+        root.addView(title);
+
+        String current = GamepadMap.target(physBit).label;
+        TextView sub = new TextView(ctx);
+        sub.setText("现在： " + current);
+        sub.setTextColor(Ui.TEXT_DIM);
+        sub.setTextSize(11.5f);
+        sub.setPadding(0, dpi(4), 0, dpi(8));
+        root.addView(sub);
+
+        LinearLayout list = new LinearLayout(ctx);
+        list.setOrientation(LinearLayout.VERTICAL);
+        String group = null;
+        int selected = GamepadMap.targetId(physBit);
+        for (final GamepadMap.Target t : GamepadMap.TARGETS) {
+            if (t.group != null && !t.group.equals(group)) {
+                group = t.group;
+                TextView head = new TextView(ctx);
+                head.setText(group);
+                head.setTextColor(Ui.TEXT_DIM);
+                head.setTextSize(11);
+                head.setPadding(0, dpi(10), 0, dpi(5));
+                list.addView(head);
+            }
+            TextView item = new TextView(ctx);
+            item.setText(t.label);
+            item.setTextSize(12.5f);
+            item.setSingleLine(true);
+            item.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            item.setIncludeFontPadding(false);
+            item.setPadding(dpi(12), dpi(10), dpi(12), dpi(10));
+            boolean on = t.id == selected;
+            item.setTextColor(on ? Ui.ACCENT : Ui.TEXT);
+            item.setBackground(on
+                    ? Ui.roundedStroke(ctx, Ui.SURFACE_2, Ui.ACCENT, 1.2f, 10)
+                    : Ui.rounded(ctx, Ui.SURFACE_2, 10));
+            item.setClickable(true);
+            item.setOnClickListener(v -> {
+                GamepadMap.setTarget(ctx, physBit, t.id);
+                onMappingChanged();
+                dialog.dismiss();
+                showMappingDialog();
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            lp.bottomMargin = dpi(4);
+            list.addView(item, lp);
+        }
+        root.addView(list);
+
+        TextView close = new TextView(ctx);
+        close.setText("取消");
+        close.setTextColor(Ui.ACCENT);
+        close.setTextSize(12.5f);
+        close.setGravity(Gravity.CENTER);
+        close.setPadding(0, dpi(10), 0, dpi(10));
+        close.setOnClickListener(v -> dialog.dismiss());
+        LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        closeLp.topMargin = dpi(10);
+
+        // Same structure as the settings dialog: the whole target list scrolls, 取消 stays pinned.
+        ScrollView scroll = new ScrollView(ctx);
+        scroll.setFillViewport(false);
+        scroll.addView(root);
+        LinearLayout outer = new LinearLayout(ctx);
+        outer.setOrientation(LinearLayout.VERTICAL);
+        outer.setBackground(Ui.rounded(ctx, Ui.SURFACE, 18));
+        outer.setPadding(dpi(18), dpi(16), dpi(18), dpi(12));
+        outer.addView(scroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        outer.addView(close, closeLp);
+
+        dialog.setContentView(outer);
+        Window w = dialog.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            w.setDimAmount(0.5f);
+            w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            WindowManager.LayoutParams lp = new WindowManager.LayoutParams();
+            lp.copyFrom(w.getAttributes());
+            lp.width = dpi(land() ? 392 : 330);
+            int screenH = getResources().getDisplayMetrics().heightPixels;
+            lp.height = land() ? Math.round(screenH * 0.86f) : WindowManager.LayoutParams.WRAP_CONTENT;
+            w.setAttributes(lp);
+        }
+        dialog.show();
     }
 
     // -------------------------------------------------------------- settings
@@ -2793,6 +3240,17 @@ public final class GamepadView extends View {
             setEditing(true);
         });
         box.addView(editEntry);
+
+        TextView mapEntry = new TextView(ctx);
+        mapEntry.setText("按键映射 · 每个键改成别的功能（配置 1/2/3 · 面键布局）");
+        mapEntry.setTextColor(Ui.ACCENT);
+        mapEntry.setTextSize(12);
+        mapEntry.setPadding(0, dpi(land ? 6 : 10), 0, 0);
+        mapEntry.setOnClickListener(v -> {
+            dialog.dismiss();
+            showMappingDialog();
+        });
+        box.addView(mapEntry);
 
         addOption(box, ctx, "移动盘类型", typeRow, land, land ? 8 : 14);
 
