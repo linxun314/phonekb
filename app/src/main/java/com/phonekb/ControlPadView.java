@@ -82,12 +82,27 @@ public class ControlPadView extends View {
     private final Paint gestOnPaint;
     private final Paint gestOffPaint;
     private final Paint middleTextPaint;
-    // 苹果风格滚轮条（v0.40.0）：一条半透明胶囊轨道 + 细箭头 + 白色滑块（iOS/macOS 质感）
-    private final Paint stripTrackPaint = Ui.fill(0x0DFFFFFF);
-    private final Paint stripThumbPaint = Ui.fill(0x6BFFFFFF);
-    private final Paint stripThumbOnPaint = Ui.fill(0xE6FFFFFF);
+    // 苹果风格滚轮条（v0.40.0，F 版 macOS 胶囊滑块）：磨砂胶囊轨道 + 顶部一道高光 +
+    // 上下细 chevron + 一根常驻的 30 dp 磨砂白滑块（中间三条细纹）；按住拖动时滑块变亮并跟随手指。
+    private final Paint stripTrackPaint = Ui.fill(stripBlend(0xFFFFFF, 0.07f, Ui.SURFACE));
+    private final Paint stripSheenPaint = Ui.fill(stripBlend(0xFFFFFF, 0.04f, Ui.SURFACE));
+    private final Paint stripThumbPaint = Ui.fill(stripBlend(0xFFFFFF, 0.50f, Ui.SURFACE));
+    private final Paint stripThumbOnPaint = Ui.fill(stripBlend(0xFFFFFF, 0.88f, Ui.SURFACE));
+    private final Paint stripThumbOffPaint = Ui.fill(stripBlend(0xFFFFFF, 0.18f, Ui.SURFACE));
+    private final Paint stripGripPaint = Ui.fill(stripBlend(0x282C34, 0.55f, Ui.SURFACE));
     private final Paint stripStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint stripThumbStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint stripChevPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+    /** 把 fg 按 alpha 混到 bg 上（都当不透明 RGB），用来拼出 macOS 那种磨砂色阶。 */
+    private static int stripBlend(int fg, float a, int bg) {
+        int fr = (fg >> 16) & 0xFF, fg2 = (fg >> 8) & 0xFF, fb = fg & 0xFF;
+        int br = (bg >> 16) & 0xFF, bg2 = (bg >> 8) & 0xFF, bb = bg & 0xFF;
+        int r = Math.round(fr * a + br * (1f - a));
+        int g = Math.round(fg2 * a + bg2 * (1f - a));
+        int b = Math.round(fb * a + bb * (1f - a));
+        return 0xFF000000 | (r << 16) | (g << 8) | b;
+    }
 
     private final float margin;
     private final float gap;
@@ -212,13 +227,16 @@ public class ControlPadView extends View {
         gestStrokePaint.setStrokeWidth(Ui.dp(context, 1.2f));
         gestStrokePaint.setColor(Ui.ACCENT);
         stripStrokePaint.setStyle(Paint.Style.STROKE);
-        stripStrokePaint.setStrokeWidth(Ui.dp(context, 1f));
-        stripStrokePaint.setColor(0x1AFFFFFF);
+        stripStrokePaint.setStrokeWidth(Ui.dp(context, 0.9f));
+        stripStrokePaint.setColor(0x21FFFFFF);
+        stripThumbStrokePaint.setStyle(Paint.Style.STROKE);
+        stripThumbStrokePaint.setStrokeWidth(Ui.dp(context, 0.8f));
+        stripThumbStrokePaint.setColor(0x33FFFFFF);
         stripChevPaint.setStyle(Paint.Style.STROKE);
         stripChevPaint.setStrokeCap(Paint.Cap.ROUND);
         stripChevPaint.setStrokeJoin(Paint.Join.ROUND);
-        stripChevPaint.setStrokeWidth(Ui.dp(context, 1.6f));
-        stripChevPaint.setColor(0xB3FFFFFF);
+        stripChevPaint.setStrokeWidth(Ui.dp(context, 1.4f));
+        stripChevPaint.setColor(0x8CFFFFFF);
         gestOnPaint = Ui.text(context, 11, Ui.ACCENT);
         gestOffPaint = Ui.text(context, 11, Ui.TEXT_DIM);
         middleTextPaint = Ui.text(context, 12, Ui.TEXT);
@@ -510,25 +528,31 @@ public class ControlPadView extends View {
     }
 
     /**
-     * 苹果风格滚轮条（v0.40.0）：整条一个半透明胶囊轨道，上下各一个细 chevron，中间一个白色
-     * 滑块。滑块平时细（5 dp）不抢眼，一按就变粗变亮并跟着手指走；对应方向的箭头同时高亮。
+     * 滚轮条（v0.40.0，macOS 胶囊滑块 F 版）：磨砂胶囊轨道 + 顶部一道很淡的高光 + 上下两个细
+     * chevron + 一根常驻的 30 dp 磨砂白滑块（中间三条细纹）。按住拖动时滑块变亮、变粗一点点并
+     * 跟着手指走，对应方向的箭头同时提亮；断开时整体压暗。
      */
     private void drawStrip(Canvas canvas) {
         if (stripRect.isEmpty()) return;
-        // 横屏时这一列很宽，轨道不能跟着变宽（会变成一个大气球）：轨道固定最宽 52 dp，
+        // 横屏时这一列很宽，轨道不能跟着变宽（会撑成一个超宽大胶囊）：轨道固定最宽 56 dp，
         // 居中放在整列里，但命中区仍然是整列，好按。
-        float trackW = Math.min(stripRect.width(), Ui.dp(getContext(), 52f));
+        float trackW = Math.min(stripRect.width(), Ui.dp(getContext(), 56f));
         float cx = stripRect.centerX();
         RectF track = new RectF(cx - trackW / 2f, stripRect.top, cx + trackW / 2f, stripRect.bottom);
-        float radius = trackW / 2f;
+        float radius = Ui.dp(getContext(), 16f);
         canvas.drawRoundRect(track, radius, radius, stripTrackPaint);
         canvas.drawRoundRect(track, radius, radius, stripStrokePaint);
+        // 顶部一道高光，做出玻璃感
+        float sheenInset = Ui.dp(getContext(), 1.2f);
+        RectF sheen = new RectF(track.left + sheenInset, track.top + sheenInset,
+                track.right - sheenInset, track.top + Ui.dp(getContext(), 9f));
+        canvas.drawRoundRect(sheen, Ui.dp(getContext(), 8f), Ui.dp(getContext(), 8f), stripSheenPaint);
 
         boolean active = stripDown;
         boolean connected = hid.isConnected();
-        float inset = Ui.dp(getContext(), 15f);
-        float chevHalf = Ui.dp(getContext(), 4.8f);
-        float chevH = Ui.dp(getContext(), 3.6f);
+        float inset = Ui.dp(getContext(), 16f);
+        float chevHalf = Ui.dp(getContext(), 3.6f);
+        float chevH = Ui.dp(getContext(), 2.6f);
         float topY = track.top + inset;
         float botY = track.bottom - inset;
 
@@ -543,24 +567,34 @@ public class ControlPadView extends View {
         chev.lineTo(cx + chevHalf, botY - chevH);
         canvas.drawPath(chev, chevronPaint(pressedKey == PRESS_SCROLL_DOWN, connected));
 
-        float thumbW = Ui.dp(getContext(), active ? 13f : 5f);
-        float thumbH = Math.max(Ui.dp(getContext(), 40f),
-                Math.min(Ui.dp(getContext(), 96f), track.height() * 0.34f));
-        float minCenter = topY + chevH + Ui.dp(getContext(), 2f) + thumbH / 2f;
-        float maxCenter = botY - chevH - Ui.dp(getContext(), 2f) - thumbH / 2f;
+        // 常驻滑块：宽 30 dp、高 74 dp 的磨砂胶囊（按住时宽 32 dp、略高，看得见"抓起来了"）
+        float thumbW = Ui.dp(getContext(), active ? 32f : 30f);
+        float thumbH = Ui.dp(getContext(), active ? 80f : 74f);
+        float minCenter = topY + chevH + Ui.dp(getContext(), 4f) + thumbH / 2f;
+        float maxCenter = botY - chevH - Ui.dp(getContext(), 4f) - thumbH / 2f;
         float cy = active ? stripTouchY : track.centerY();
         if (cy < minCenter) cy = minCenter;
         if (cy > maxCenter) cy = maxCenter;
         RectF thumb = new RectF(cx - thumbW / 2f, cy - thumbH / 2f, cx + thumbW / 2f, cy + thumbH / 2f);
-        float tr = thumbW / 2f;
-        canvas.drawRoundRect(thumb, tr, tr, active ? stripThumbOnPaint : stripThumbPaint);
+        float tr = Ui.dp(getContext(), 15f);
+        Paint thumbFill = !connected ? stripThumbOffPaint : (active ? stripThumbOnPaint : stripThumbPaint);
+        canvas.drawRoundRect(thumb, tr, tr, thumbFill);
+        canvas.drawRoundRect(thumb, tr, tr, stripThumbStrokePaint);
+        // 三条细纹：一眼看出这根东西可以抓
+        float gripHalf = Ui.dp(getContext(), 7f);
+        float gripW = Ui.dp(getContext(), 1.2f);
+        for (int i = -1; i <= 1; i++) {
+            float gy = cy + i * Ui.dp(getContext(), 6f);
+            RectF g = new RectF(cx - gripHalf, gy - gripW / 2f, cx + gripHalf, gy + gripW / 2f);
+            canvas.drawRoundRect(g, gripW / 2f, gripW / 2f, stripGripPaint);
+        }
     }
 
     /** chevron 的颜色 / 粗细：按下时更白更粗，未连接时整体压暗。 */
     private Paint chevronPaint(boolean on, boolean connected) {
-        stripChevPaint.setStrokeWidth(Ui.dp(getContext(), on ? 2.1f : 1.6f));
+        stripChevPaint.setStrokeWidth(Ui.dp(getContext(), on ? 2f : 1.4f));
         if (!connected) stripChevPaint.setColor(0x4DFFFFFF);
-        else stripChevPaint.setColor(on ? 0xFFFFFFFF : 0xB3FFFFFF);
+        else stripChevPaint.setColor(on ? 0xFFFFFFFF : 0x8CFFFFFF);
         return stripChevPaint;
     }
 
