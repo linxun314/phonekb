@@ -30,12 +30,23 @@ public final class PointerSettings {
      * 「滚轮条」：手指按在右侧箭头条上上下拖动，每拖这么远（dp）发一格滚轮。
      * 数值越大越慢、越细腻；越小越"灵敏"。
      */
-    public static final int STRIP_STEP_SLOW = 24;
-    public static final int STRIP_STEP_MID = 16;
-    public static final int STRIP_STEP_FAST = 10;
-    public static final int STRIP_STEP_MIN = 6;
+    public static final int STRIP_STEP_SLOW = 16;
+    public static final int STRIP_STEP_MID = 10;
+    public static final int STRIP_STEP_FAST = 6;
+    public static final int STRIP_STEP_MIN = 4;
     public static final int STRIP_STEP_MAX = 40;
     public static final int STRIP_STEP_DEFAULT = STRIP_STEP_MID;
+
+    /** 滚轮条发包节拍：一格一格均匀发出去，比「一帧攒几格一次发」顺滑得多。 */
+    public static final int STRIP_SMOOTH_STD = 10;
+    public static final int STRIP_SMOOTH_FAST = 8;
+    public static final int STRIP_SMOOTH_SLOWEST = 14;
+    public static final int STRIP_SMOOTH_MIN = 6;
+    public static final int STRIP_SMOOTH_MAX = 20;
+    public static final int STRIP_SMOOTH_DEFAULT = STRIP_SMOOTH_STD;
+
+    /** 拖动时每滚动几格震一下；关掉后完全静音（有人觉得震动在加重「卡」的错觉）。 */
+    public static final int STRIP_HAPTIC_EVERY = 8;
 
     public static final int LONG_PRESS_MIN = 250;
     public static final int LONG_PRESS_MAX = 600;
@@ -56,6 +67,8 @@ public final class PointerSettings {
     private static final String KEY_SCROLL_HOLD = "ptr_scroll_hold";
     private static final String KEY_STRIP_STEP = "ptr_strip_step";
     private static final String KEY_STRIP_FLING = "ptr_strip_fling";
+    private static final String KEY_STRIP_SMOOTH = "ptr_strip_smooth";
+    private static final String KEY_STRIP_HAPTIC = "ptr_strip_haptic";
 
     private static float speed = SPEED_DEFAULT;
     private static int rows = ROWS_DEFAULT;
@@ -75,6 +88,8 @@ public final class PointerSettings {
     private static int reportMs = REPORT_DEFAULT;
     private static int scrollHoldMs = SCROLL_HOLD_DEFAULT;
     private static int stripStepDp = STRIP_STEP_DEFAULT;
+    private static int stripSmoothMs = STRIP_SMOOTH_DEFAULT;
+    private static boolean stripHaptic = true;
     private static boolean stripFling = false;
 
     /** Rewind / fast-forward keys hold down the real consumer key (players keep seeking). */
@@ -108,6 +123,8 @@ public final class PointerSettings {
         scrollHoldMs = clampScrollHold(p.getInt(KEY_SCROLL_HOLD, SCROLL_HOLD_DEFAULT));
         stripStepDp = clampStripStep(p.getInt(KEY_STRIP_STEP, STRIP_STEP_DEFAULT));
         stripFling = p.getBoolean(KEY_STRIP_FLING, false);
+        stripSmoothMs = clampStripSmooth(p.getInt(KEY_STRIP_SMOOTH, STRIP_SMOOTH_DEFAULT));
+        stripHaptic = p.getBoolean(KEY_STRIP_HAPTIC, true);
     }
 
     /** How often (ms) the up / down scroll keys repeat while held down. */
@@ -135,6 +152,34 @@ public final class PointerSettings {
         init(context);
         stripFling = value;
         prefs(context).edit().putBoolean(KEY_STRIP_FLING, value).apply();
+    }
+
+    /** 每发一格滚轮的间隔（毫秒）：标准 10 / 更顺 8。 */
+    public static int stripSmoothMs() {
+        return stripSmoothMs;
+    }
+
+    public static void setStripSmoothMs(Context context, int value) {
+        init(context);
+        stripSmoothMs = clampStripSmooth(value);
+        prefs(context).edit().putInt(KEY_STRIP_SMOOTH, stripSmoothMs).apply();
+    }
+
+    public static int clampStripSmooth(int value) {
+        if (value < STRIP_SMOOTH_MIN) return STRIP_SMOOTH_MIN;
+        if (value > STRIP_SMOOTH_MAX) return STRIP_SMOOTH_MAX;
+        return value;
+    }
+
+    /** 拖动滚轮条时要不要震动反馈（默认开）。 */
+    public static boolean stripHaptic() {
+        return stripHaptic;
+    }
+
+    public static void setStripHaptic(Context context, boolean value) {
+        init(context);
+        stripHaptic = value;
+        prefs(context).edit().putBoolean(KEY_STRIP_HAPTIC, value).apply();
     }
 
     public static int clampStripStep(int value) {

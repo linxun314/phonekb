@@ -34,6 +34,8 @@ public final class SensitivityDialog {
         final int originalScrollHold = PointerSettings.scrollHoldMs();
         final int originalStripStep = PointerSettings.stripStepDp();
         final boolean originalStripFling = PointerSettings.stripFling();
+        final int originalStripSmooth = PointerSettings.stripSmoothMs();
+        final boolean originalStripHaptic = PointerSettings.stripHaptic();
 
         final Dialog dialog = new Dialog(ctx);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
@@ -190,6 +192,25 @@ public final class SensitivityDialog {
                 });
         addRow(box, ctx, "滚轮条抬手惯性（甩一下再滑几格）", stripFlingRow[0], land, land ? 8 : 14);
 
+        final LinearLayout[] stripSmoothRow = new LinearLayout[1];
+        stripSmoothRow[0] = segment(ctx, new String[]{"标准 10 ms", "更顺 8 ms"},
+                PointerSettings.stripSmoothMs() <= PointerSettings.STRIP_SMOOTH_FAST ? 1 : 0, which -> {
+                    PointerSettings.setStripSmoothMs(ctx, which == 0
+                            ? PointerSettings.STRIP_SMOOTH_STD : PointerSettings.STRIP_SMOOTH_FAST);
+                    styleSegments(stripSmoothRow[0], which);
+                    if (onChanged != null) onChanged.run();
+                });
+        addRow(box, ctx, "滚轮条顺滑度（每发一格的间隔）", stripSmoothRow[0], land, land ? 8 : 14);
+
+        final LinearLayout[] stripHapticRow = new LinearLayout[1];
+        stripHapticRow[0] = segment(ctx, new String[]{"开", "关"},
+                PointerSettings.stripHaptic() ? 0 : 1, which -> {
+                    PointerSettings.setStripHaptic(ctx, which == 0);
+                    styleSegments(stripHapticRow[0], which);
+                    if (onChanged != null) onChanged.run();
+                });
+        addRow(box, ctx, "滚轮条震动（关掉更安静，有的机器关节省）", stripHapticRow[0], land, land ? 8 : 14);
+
         speedBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
@@ -225,6 +246,8 @@ public final class SensitivityDialog {
             PointerSettings.setScrollHoldMs(ctx, originalScrollHold);
             PointerSettings.setStripStepDp(ctx, originalStripStep);
             PointerSettings.setStripFling(ctx, originalStripFling);
+            PointerSettings.setStripSmoothMs(ctx, originalStripSmooth);
+            PointerSettings.setStripHaptic(ctx, originalStripHaptic);
             if (onChanged != null) onChanged.run();
             dialog.dismiss();
         });

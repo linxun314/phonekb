@@ -3,6 +3,7 @@ package com.phonekb;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.RectF;
 import android.os.Handler;
 import android.os.Looper;
@@ -81,8 +82,12 @@ public class ControlPadView extends View {
     private final Paint gestOnPaint;
     private final Paint gestOffPaint;
     private final Paint middleTextPaint;
-    private final Paint stripRailPaint = Ui.fill(0x33FFFFFF);
-    private final Paint stripRailOnPaint = Ui.fill(Ui.ACCENT);
+    // 苹果风格滚轮条（v0.40.0）：一条半透明胶囊轨道 + 细箭头 + 白色滑块（iOS/macOS 质感）
+    private final Paint stripTrackPaint = Ui.fill(0x0DFFFFFF);
+    private final Paint stripThumbPaint = Ui.fill(0x6BFFFFFF);
+    private final Paint stripThumbOnPaint = Ui.fill(0xE6FFFFFF);
+    private final Paint stripStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint stripChevPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     private final float margin;
     private final float gap;
@@ -104,6 +109,11 @@ public class ControlPadView extends View {
     private int flingDir;
     private int flingLeft;
 
+    /** 待发的滚轮格数（正 = 手指往上）；队列上限见 STRIP_QUEUE_MAX。 */
+    private int stripQueue;
+    private boolean stripQueueRunning;
+    private static final int STRIP_QUEUE_MAX = 6;
+
     /** Hold cadence is user-configurable (慢 180 / 中 120 / 快 70 ms), see PointerSettings. */
     private final Runnable scrollRepeat = new Runnable() {
         @Override
@@ -114,6 +124,45 @@ public class ControlPadView extends View {
             }
         }
     };
+
+    /**
+     * 滚轮平滑队列：拖动只往 stripQueue 里加格数，这里按固定节拍一格一格发出去。
+     * 以前是「一帧算几步就一口气发几步」，主机同时收到 2–3 格会跳一下，还会撞蓝牙通道上限。
+     */
+    private final Runnable stripQueueRun = new Runnable() {
+        @Override
+        public void run() {
+            if (stripQueue == 0) {
+                stripQueueRunning = false;
+                return;
+            }
+            int s = stripQueue > 0 ? 1 : -1;
+            stripQueue -= s;
+            hid.mouseWheel(PadGestures.natural() ? -s : s);
+            stripTicks++;
+            if (stripTicks >= PointerSettings.STRIP_HAPTIC_EVERY) {
+                stripTicks = 0;
+                if (PointerSettings.stripHaptic()) haptic();
+            }
+            if (stripQueue != 0) {
+                handler.postDelayed(this, Math.max(4, PointerSettings.stripSmoothMs()));
+            } else {
+                stripQueueRunning = false;
+            }
+        }
+    };
+
+    /** 往平滑队列里加格数（超上限丢最老的，宁可少滚一点也不要越滚越延迟）。 */
+    private void enqueueStrip(int steps) {
+        if (steps == 0) return;
+        stripQueue += steps;
+        if (stripQueue > STRIP_QUEUE_MAX) stripQueue = STRIP_QUEUE_MAX;
+        if (stripQueue < -STRIP_QUEUE_MAX) stripQueue = -STRIP_QUEUE_MAX;
+        if (!stripQueueRunning) {
+            stripQueueRunning = true;
+            handler.post(stripQueueRun);
+        }
+    }
 
     /** 快速甩一下后的惯性：再补几格滚轮（可选，默认关）。 */
     private final Runnable stripFlingRun = new Runnable() {
@@ -162,6 +211,14 @@ public class ControlPadView extends View {
         gestStrokePaint.setStyle(Paint.Style.STROKE);
         gestStrokePaint.setStrokeWidth(Ui.dp(context, 1.2f));
         gestStrokePaint.setColor(Ui.ACCENT);
+        stripStrokePaint.setStyle(Paint.Style.STROKE);
+        stripStrokePaint.setStrokeWidth(Ui.dp(context, 1f));
+        stripStrokePaint.setColor(0x1AFFFFFF);
+        stripChevPaint.setStyle(Paint.Style.STROKE);
+        stripChevPaint.setStrokeCap(Paint.Cap.ROUND);
+        stripChevPaint.setStrokeJoin(Paint.Join.ROUND);
+        stripChevPaint.setStrokeWidth(Ui.dp(context, 1.6f));
+        stripChevPaint.setColor(0xB3FFFFFF);
         gestOnPaint = Ui.text(context, 11, Ui.ACCENT);
         gestOffPaint = Ui.text(context, 11, Ui.TEXT_DIM);
         middleTextPaint = Ui.text(context, 12, Ui.TEXT);
@@ -265,11 +322,7 @@ public class ControlPadView extends View {
         drawSensChip(canvas);
         drawGestChip(canvas);
 
-        drawKey(canvas, scrollUpRect, pressedKey == PRESS_SCROLL_UP);
-        drawKey(canvas, scrollDownRect, pressedKey == PRESS_SCROLL_DOWN);
-        drawArrow(canvas, scrollUpRect, Icons.UP_ARROW, icon);
-        drawArrow(canvas, scrollDownRect, Icons.DOWN_ARROW, icon);
-        drawStripRail(canvas);
+        drawStrip(canvas);
 
         drawKey(canvas, backRect, pressedKey == PRESS_BACK);
         drawKey(canvas, homeRect, pressedKey == PRESS_HOME);
@@ -331,11 +384,6 @@ public class ControlPadView extends View {
     private void drawKey(Canvas canvas, RectF rect, boolean pressed) {
         if (rect.isEmpty()) return;
         canvas.drawRoundRect(rect, keyRadius, keyRadius, pressed ? pressPaint : keyPaint);
-    }
-
-    private void drawArrow(Canvas canvas, RectF rect, int iconId, Paint icon) {
-        if (rect.isEmpty()) return;
-        Icons.draw(canvas, iconId, iconBox(rect), icon);
     }
 
     private RectF iconBox(RectF rect) {
@@ -426,14 +474,8 @@ public class ControlPadView extends View {
             handler.removeCallbacks(scrollRepeat);
             scrollDir = 0;
         }
-        int dir = steps > 0 ? 1 : -1;
-        pressedKey = dir > 0 ? PRESS_SCROLL_UP : PRESS_SCROLL_DOWN;
-        hid.mouseWheel(PadGestures.natural() ? -steps : steps);
-        stripTicks += Math.abs(steps);
-        if (stripTicks >= 3) {
-            stripTicks = 0;
-            haptic();
-        }
+        pressedKey = steps > 0 ? PRESS_SCROLL_UP : PRESS_SCROLL_DOWN;
+        enqueueStrip(steps);
         invalidate();
     }
 
@@ -444,7 +486,7 @@ public class ControlPadView extends View {
         stripDown = false;
         scrollDir = 0;
         pressedKey = -1;
-        if (wasDown && allowFling && stripDragged && stripVel != 0f) {
+        if (wasDown && allowFling && stripDragged && stripVel != 0f && stripQueue == 0) {
             startStripFling(stripVel);
         }
         stripVel = 0f;
@@ -467,20 +509,79 @@ public class ControlPadView extends View {
         handler.postDelayed(stripFlingRun, 40);
     }
 
-    /** 两颗箭头之间那条细轨：拖动时整条变蓝，让「这里能拖」看得出来。 */
-    private void drawStripRail(Canvas canvas) {
+    /**
+     * 苹果风格滚轮条（v0.40.0）：整条一个半透明胶囊轨道，上下各一个细 chevron，中间一个白色
+     * 滑块。滑块平时细（5 dp）不抢眼，一按就变粗变亮并跟着手指走；对应方向的箭头同时高亮。
+     */
+    private void drawStrip(Canvas canvas) {
         if (stripRect.isEmpty()) return;
+        // 横屏时这一列很宽，轨道不能跟着变宽（会变成一个大气球）：轨道固定最宽 52 dp，
+        // 居中放在整列里，但命中区仍然是整列，好按。
+        float trackW = Math.min(stripRect.width(), Ui.dp(getContext(), 52f));
+        float cx = stripRect.centerX();
+        RectF track = new RectF(cx - trackW / 2f, stripRect.top, cx + trackW / 2f, stripRect.bottom);
+        float radius = trackW / 2f;
+        canvas.drawRoundRect(track, radius, radius, stripTrackPaint);
+        canvas.drawRoundRect(track, radius, radius, stripStrokePaint);
+
         boolean active = stripDown;
-        float railW = Ui.dp(getContext(), 3f);
-        RectF rail = new RectF(stripRect.centerX() - railW / 2f, stripRect.top + Ui.dp(getContext(), 10),
-                stripRect.centerX() + railW / 2f, stripRect.bottom - Ui.dp(getContext(), 10));
-        float radius = railW / 2f;
-        canvas.drawRoundRect(rail, radius, radius, active ? stripRailOnPaint : stripRailPaint);
-        if (active) {
-            float dotR = Ui.dp(getContext(), 4f);
-            float cy = Math.max(rail.top, Math.min(rail.bottom, stripTouchY));
-            canvas.drawCircle(rail.centerX(), cy, dotR, stripRailOnPaint);
-        }
+        boolean connected = hid.isConnected();
+        float inset = Ui.dp(getContext(), 15f);
+        float chevHalf = Ui.dp(getContext(), 4.8f);
+        float chevH = Ui.dp(getContext(), 3.6f);
+        float topY = track.top + inset;
+        float botY = track.bottom - inset;
+
+        Path chev = new Path();
+        chev.moveTo(cx - chevHalf, topY + chevH);
+        chev.lineTo(cx, topY);
+        chev.lineTo(cx + chevHalf, topY + chevH);
+        canvas.drawPath(chev, chevronPaint(pressedKey == PRESS_SCROLL_UP, connected));
+        chev.reset();
+        chev.moveTo(cx - chevHalf, botY - chevH);
+        chev.lineTo(cx, botY);
+        chev.lineTo(cx + chevHalf, botY - chevH);
+        canvas.drawPath(chev, chevronPaint(pressedKey == PRESS_SCROLL_DOWN, connected));
+
+        float thumbW = Ui.dp(getContext(), active ? 13f : 5f);
+        float thumbH = Math.max(Ui.dp(getContext(), 40f),
+                Math.min(Ui.dp(getContext(), 96f), track.height() * 0.34f));
+        float minCenter = topY + chevH + Ui.dp(getContext(), 2f) + thumbH / 2f;
+        float maxCenter = botY - chevH - Ui.dp(getContext(), 2f) - thumbH / 2f;
+        float cy = active ? stripTouchY : track.centerY();
+        if (cy < minCenter) cy = minCenter;
+        if (cy > maxCenter) cy = maxCenter;
+        RectF thumb = new RectF(cx - thumbW / 2f, cy - thumbH / 2f, cx + thumbW / 2f, cy + thumbH / 2f);
+        float tr = thumbW / 2f;
+        canvas.drawRoundRect(thumb, tr, tr, active ? stripThumbOnPaint : stripThumbPaint);
+    }
+
+    /** chevron 的颜色 / 粗细：按下时更白更粗，未连接时整体压暗。 */
+    private Paint chevronPaint(boolean on, boolean connected) {
+        stripChevPaint.setStrokeWidth(Ui.dp(getContext(), on ? 2.1f : 1.6f));
+        if (!connected) stripChevPaint.setColor(0x4DFFFFFF);
+        else stripChevPaint.setColor(on ? 0xFFFFFFFF : 0xB3FFFFFF);
+        return stripChevPaint;
+    }
+
+    /**
+     * 调试用：把滚轮条摆成「正在拖动」的样子（pct = 0..100 手指在条上的位置），
+     * 4 秒后自动复原。截图验证用，MIUI 上没法用 adb 模拟真实触摸。
+     */
+    public void debugShowStripActive(int pct) {
+        if (stripRect.isEmpty()) return;
+        int p = Math.max(0, Math.min(100, pct));
+        stripDown = true;
+        stripDragged = true;
+        stripTouchY = stripRect.top + stripRect.height() * p / 100f;
+        pressedKey = PRESS_SCROLL_DOWN;
+        invalidate();
+        handler.postDelayed(() -> {
+            stripDown = false;
+            stripDragged = false;
+            pressedKey = -1;
+            invalidate();
+        }, 4000);
     }
 
     private void resetPressed() {
