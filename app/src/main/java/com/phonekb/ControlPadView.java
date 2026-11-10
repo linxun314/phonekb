@@ -115,6 +115,10 @@ public class ControlPadView extends View {
     // 滚轮条状态（v0.39.2）：按住不动 = 慢速连滚，上下拖动 = 跟手滚轮。
     private boolean stripDown;
     private boolean stripDragged;
+    /** 这次按下是不是真的按在滑块上（v0.40.0：只有抓到滑块才跟着手指走）。 */
+    private boolean stripGrab;
+    /** 滑块当前所在的矩形（drawStrip 里更新），用于判断手指有没有抓到滑块。 */
+    private final RectF stripThumbRect = new RectF();
     private float stripLastY;
     private float stripAcc;
     private float stripVel;
@@ -435,22 +439,48 @@ public class ControlPadView extends View {
     }
 
     /**
+     * 手指是不是按在滑块上（命中区比滑块本身放宽一圈，方便抓）。
+     * stripThumbRect 只在绘制时更新；还没画过时按轨道中心兜底。
+     */
+    private boolean stripThumbHit(float x, float y) {
+        RectF hit = new RectF(stripThumbRect);
+        if (hit.isEmpty()) {
+            float trackW = Math.min(stripRect.width(), Ui.dp(getContext(), 56f));
+            float cx = stripRect.centerX();
+            float hw = Ui.dp(getContext(), 15f);
+            float hh = Ui.dp(getContext(), 37f);
+            hit.set(cx - hw, stripRect.centerY() - hh, cx + hw, stripRect.centerY() + hh);
+            if (trackW <= 0f) return false;
+        }
+        float padX = Ui.dp(getContext(), 12f);
+        float padY = Ui.dp(getContext(), 14f);
+        hit.inset(-padX, -padY);
+        // 别让命中区伸到整列外面去（否则点最上方箭头也会被判成抓滑块）
+        float maxX = Math.min(stripRect.right, hit.right);
+        float minY = Math.max(stripRect.top, hit.top);
+        float maxY = Math.min(stripRect.bottom, hit.bottom);
+        return x >= hit.left && x <= maxX && y >= minY && y <= maxY;
+    }
+
+    /**
      * 滚轮条按下（v0.39.2）：立刻发一格（点一下 = 一格，和以前一样），同时预备「按住不动
      * 就慢速连滚」；手指一旦上下拖动就切成跟手滚轮，并取消连滚。
      *
      * @param tapDir 点一下要发哪一格（上半区 = +1 往上，下半区 = -1 往下）
+     * @param grab   手指是不是按在滑块上：只有 true 才会跟着手指拖动
      */
-    private void beginStrip(float y, int tapDir) {
+    private void beginStrip(float y, int tapDir, boolean grab) {
         PointerSettings.init(getContext());
         handler.removeCallbacks(stripFlingRun);
         flingLeft = 0;
         stripDown = true;
+        stripGrab = grab;
         stripDragged = false;
         stripAcc = 0f;
         stripVel = 0f;
         stripTicks = 0;
         stripLastY = y;
-        stripTouchY = y;
+        if (grab) stripTouchY = y; // 没抓住滑块就别挪它
         stripLastAt = SystemClock.uptimeMillis();
         scrollDir = tapDir;
         pressedKey = tapDir > 0 ? PRESS_SCROLL_UP : PRESS_SCROLL_DOWN;
@@ -462,8 +492,9 @@ public class ControlPadView extends View {
         invalidate();
     }
 
-    /** 滚轮条拖动：手指每走 stripStepDp 就发一格滚轮。 */
+    /** 滚轮条拖动：手指每走 stripStepDp 就发一格滚轮（只有抓住滑块时才跟手）。 */
     private void moveStrip(float y) {
+        if (!stripGrab) return; // 点的是箭头 / 轨道空白：只保留「按住连滚」，滑块不动
         long now = SystemClock.uptimeMillis();
         float dt = Math.max(1f, now - stripLastAt);
         float dy = y - stripLastY;
@@ -509,6 +540,7 @@ public class ControlPadView extends View {
         }
         stripVel = 0f;
         stripDragged = false;
+        stripGrab = false;
         invalidate();
     }
 
@@ -548,7 +580,8 @@ public class ControlPadView extends View {
                 track.right - sheenInset, track.top + Ui.dp(getContext(), 9f));
         canvas.drawRoundRect(sheen, Ui.dp(getContext(), 8f), Ui.dp(getContext(), 8f), stripSheenPaint);
 
-        boolean active = stripDown;
+        // 只有真正抓住滑块才算「拖动中」：点箭头 / 点轨道空白时滑块一动不动，也不变白。
+        boolean grabbed = stripDown && stripGrab;
         boolean connected = hid.isConnected();
         float inset = Ui.dp(getContext(), 16f);
         float chevHalf = Ui.dp(getContext(), 3.6f);
@@ -567,17 +600,18 @@ public class ControlPadView extends View {
         chev.lineTo(cx + chevHalf, botY - chevH);
         canvas.drawPath(chev, chevronPaint(pressedKey == PRESS_SCROLL_DOWN, connected));
 
-        // 常驻滑块：宽 30 dp、高 74 dp 的磨砂胶囊（按住时宽 32 dp、略高，看得见"抓起来了"）
-        float thumbW = Ui.dp(getContext(), active ? 32f : 30f);
-        float thumbH = Ui.dp(getContext(), active ? 80f : 74f);
+        // 常驻滑块：宽 30 dp、高 74 dp 的磨砂胶囊（抓住时宽 32 dp、略高，看得见"抓起来了"）
+        float thumbW = Ui.dp(getContext(), grabbed ? 32f : 30f);
+        float thumbH = Ui.dp(getContext(), grabbed ? 80f : 74f);
         float minCenter = topY + chevH + Ui.dp(getContext(), 4f) + thumbH / 2f;
         float maxCenter = botY - chevH - Ui.dp(getContext(), 4f) - thumbH / 2f;
-        float cy = active ? stripTouchY : track.centerY();
+        float cy = grabbed ? stripTouchY : track.centerY();
         if (cy < minCenter) cy = minCenter;
         if (cy > maxCenter) cy = maxCenter;
         RectF thumb = new RectF(cx - thumbW / 2f, cy - thumbH / 2f, cx + thumbW / 2f, cy + thumbH / 2f);
+        stripThumbRect.set(thumb);
         float tr = Ui.dp(getContext(), 15f);
-        Paint thumbFill = !connected ? stripThumbOffPaint : (active ? stripThumbOnPaint : stripThumbPaint);
+        Paint thumbFill = !connected ? stripThumbOffPaint : (grabbed ? stripThumbOnPaint : stripThumbPaint);
         canvas.drawRoundRect(thumb, tr, tr, thumbFill);
         canvas.drawRoundRect(thumb, tr, tr, stripThumbStrokePaint);
         // 三条细纹：一眼看出这根东西可以抓
@@ -606,13 +640,32 @@ public class ControlPadView extends View {
         if (stripRect.isEmpty()) return;
         int p = Math.max(0, Math.min(100, pct));
         stripDown = true;
+        stripGrab = true;
         stripDragged = true;
         stripTouchY = stripRect.top + stripRect.height() * p / 100f;
         pressedKey = PRESS_SCROLL_DOWN;
         invalidate();
         handler.postDelayed(() -> {
             stripDown = false;
+            stripGrab = false;
             stripDragged = false;
+            pressedKey = -1;
+            invalidate();
+        }, 4000);
+    }
+
+    /**
+     * 调试用：模拟「点了箭头」的样子 —— 箭头提亮、滑块留在中间一动不动（v0.40.0）。
+     */
+    public void debugShowStripTap(int dir) {
+        if (stripRect.isEmpty()) return;
+        stripDown = true;
+        stripGrab = false;
+        stripDragged = false;
+        pressedKey = dir >= 0 ? PRESS_SCROLL_UP : PRESS_SCROLL_DOWN;
+        invalidate();
+        handler.postDelayed(() -> {
+            stripDown = false;
             pressedKey = -1;
             invalidate();
         }, 4000);
@@ -676,8 +729,11 @@ public class ControlPadView extends View {
                     return true;
                 }
                 if (!stripRect.isEmpty() && stripRect.contains(x, y)) {
-                    // 点上半区 = 上一格，下半区 = 下一格；接着上下拖就是跟手滚轮。
-                    beginStrip(y, y < stripRect.centerY() ? 1 : -1);
+                    // 点上半区 = 上一格，下半区 = 下一格。
+                    // v0.40.0：只有手指真的落在滑块上才进入「抓着滑」；点箭头 / 点轨道空白
+                    // 时滑块一动不动，只让箭头提亮（不然滑块会跟着乱跳）。
+                    boolean grab = stripThumbHit(x, y);
+                    beginStrip(y, y < stripRect.centerY() ? 1 : -1, grab);
                     return true;
                 }
                 if (backRect.contains(x, y)) {

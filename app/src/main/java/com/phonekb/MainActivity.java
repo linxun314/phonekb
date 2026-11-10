@@ -290,7 +290,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         footer = new TextView(this);
-        footer.setText("PhoneKB v0.40.0 · 蓝牙 HID · 平板 / 电脑 · 键盘 / 触控板 / 媒体 / 手柄");
+        footer.setText("PhoneKB v0.40.1 · 蓝牙 HID · 平板 / 电脑 · 键盘 / 触控板 / 媒体 / 手柄");
         footer.setTextColor(Ui.TEXT_DIM);
         footer.setTextSize(11);
         footer.setGravity(Gravity.CENTER);
@@ -1335,7 +1335,7 @@ public class MainActivity extends Activity {
                         + "电脑布局：顶部一排快捷键 Ctrl+C / Ctrl+V / Ctrl+X / Ctrl+A / Alt+Tab，下面带 Tab、方向键和 Ctrl / Alt / Win，适合敲命令、远程桌面和组合键。\n\n"
                         + "指针灵敏度：触控板页触控卡片左上角的「灵敏度 1.0x」胶囊可以打开设置——指针速度 0.4x–2.5x（1.0x 就是以前的手感）、加速度（快扫自动加速）、滚轮速度（一次滑动滚几行）、上下键按住滚动（慢 = 一格一格挪）、滚轮条灵敏度与抬手惯性；改完对触控板页、触控板浮层、手柄页触控区同时生效，并且会记住。\n\n"
                         + "触控板手势（v0.39.0）：单指点击=左键，双指点击=右键，双指上下滑=滚动（甩一下还会惯性继续滑）；刚点完再按住就能拖着走（点按拖动），松手后左键还按着、下次点击才放下（拖拽锁定，选文字和拖文件很好用）；手指推到触控区边缘会继续加速（边缘续推）；手掌贴屏幕不会乱跳（误触抑制）。平板模式下：双指右滑=返回，三指下滑=主页，三指上滑 / 左右滑=多任务。电脑模式下：双指横滑=横向滚动，双指右滑=后退、左滑=前进，三指上=任务视图、下=显示桌面、左右=切窗口，四指左右=切换虚拟桌面，捏合=Ctrl+滚轮缩放。每一项都在「帮助 → 更多设置 → 触控板手势」里单独开关，触控区左上角还有一颗「手势 开 / 关」胶囊可以一键全关。\n\n"
-                        + "触控板：单指滑动移动指针，单指点击=左键，双指点击=右键，双指上下滑=滚动；右侧是一条 macOS 风格的滚动条（磨砂胶囊轨道 + 一根 30 dp 白滑块带三条细纹 + 上下小箭头）：点一下就滚一格，按住不动连续慢滚，手指按在条上不抬手上下拖就是跟手的鼠标滚轮（v0.40.0，默认每 10 dp 一格；在指针灵敏度里能调条子灵敏度 / 抬手惯性 / 顺滑度 / 震动）；左侧「数字」弹出数字键盘（输入密码），「键盘」弹出简易手机键盘（带数字行，数字也可用来选输入法的候选词），「菜单」等于平板菜单键。\n\n"
+                        + "触控板：单指滑动移动指针，单指点击=左键，双指点击=右键，双指上下滑=滚动；右侧是一条 macOS 风格的滚动条（磨砂胶囊轨道 + 一根 30 dp 白滑块带三条细纹 + 上下小箭头）：点一下箭头或轨道空白就滚一格（滑块留在中间不动），按住不动连续慢滚；只有手指按在那根白滑块上才是「抓住」，不抬手上下拖就是跟手的鼠标滚轮，滑块会跟着手指走、变白变大（v0.40.1；在指针灵敏度里能调条子灵敏度 / 抬手惯性 / 顺滑度 / 震动）；左侧「数字」弹出数字键盘（输入密码），「键盘」弹出简易手机键盘（带数字行，数字也可用来选输入法的候选词），「菜单」等于平板菜单键。\n\n"
                         + "媒体页：从上到下是「触控板」快键、媒体卡和常用键卡。媒体卡第一排三个大方键：上一段 ⏮ / 播放暂停 ⏯ / 下一段 ⏭；第二排两个长条：−10s / ＋10s，发的是方向键 ← / →，点一次快退或快进 10 秒，按住连续快退 / 快进（长按约 0.4 秒后每 0.1 秒发一次），上一段 / 下一段键按住也会连续跳。\n\n"
                         + "常用键卡是 2 行 × 5 列的圆形大键：第一排 音量+ / 音量− / 静音 / 截屏 / 多任务，第二排 亮度− / 亮度+ / 返回 / 主页 / 菜单。截屏发的是蓝牙键盘的 PrintScreen 键，Android 会直接截屏；多任务发 Alt+Tab（系统「切换应用」快捷键）。\n\n"
                         + "「帮助 → 更多设置」里可以调：指针点击方式（抬手点击 / 按下即点）、指针上报节奏、触控板手势（开关与详细设置）、长按拖拽阈值（250 / 350 / 450 ms）、极速模式（少震动、移动中不重绘，更跟手）、界面大小，以及指针延迟测量。\n\n"
@@ -2247,6 +2247,14 @@ public class MainActivity extends Activity {
             final int pct = intent.getIntExtra("striptest", 50);
             new Handler(Looper.getMainLooper()).postDelayed(() -> {
                 if (currentTab == TAB_TOUCHPAD) touchpadView.debugShowStripActive(pct);
+            }, 1700);
+        }
+        // Debug/test hook: 1 = upper arrow lit, 2 = lower arrow lit, while the slider stays put
+        // (verifies "tapping the arrows does not move the thumb"). v0.40.0.
+        if (touchpadView != null && intent.hasExtra("striptap")) {
+            final int dir = intent.getIntExtra("striptap", 1);
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                if (currentTab == TAB_TOUCHPAD) touchpadView.debugShowStripTap(dir);
             }, 1700);
         }
         // Debug/test hook: the floating touch pad overlay (adb cannot tap it) and its offset.
