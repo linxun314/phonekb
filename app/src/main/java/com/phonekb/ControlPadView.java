@@ -37,6 +37,9 @@ public class ControlPadView extends View {
     private static final int PRESS_SCROLL_UP = 5;
     private static final int PRESS_SCROLL_DOWN = 6;
     private static final int PRESS_MENU = 7;
+    private static final int PRESS_MIDDLE = 8;
+
+    private static final int MOUSE_MIDDLE = 4;
 
     private final HidManager hid;
     private final PadController pad;
@@ -67,7 +70,14 @@ public class ControlPadView extends View {
     private final RectF backRect = new RectF();
     private final RectF homeRect = new RectF();
     private final RectF recentsRect = new RectF();
+    private final RectF middleRect = new RectF();
     private final RectF sensChipRect = new RectF();
+    private final RectF gestChipRect = new RectF();
+    private final Paint gestBgPaint = Ui.fill(Ui.SURFACE_2);
+    private final Paint gestStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint gestOnPaint;
+    private final Paint gestOffPaint;
+    private final Paint middleTextPaint;
 
     private final float margin;
     private final float gap;
@@ -121,7 +131,14 @@ public class ControlPadView extends View {
         sensStrokePaint.setStyle(Paint.Style.STROKE);
         sensStrokePaint.setStrokeWidth(Ui.dp(context, 1.2f));
         sensStrokePaint.setColor(Ui.ACCENT);
+        gestStrokePaint.setStyle(Paint.Style.STROKE);
+        gestStrokePaint.setStrokeWidth(Ui.dp(context, 1.2f));
+        gestStrokePaint.setColor(Ui.ACCENT);
+        gestOnPaint = Ui.text(context, 11, Ui.ACCENT);
+        gestOffPaint = Ui.text(context, 11, Ui.TEXT_DIM);
+        middleTextPaint = Ui.text(context, 12, Ui.TEXT);
         PointerSettings.init(context);
+        PadGestures.init(context);
     }
 
     public void setListener(Listener listener) {
@@ -142,6 +159,7 @@ public class ControlPadView extends View {
         if (contentW <= 0 || contentH <= 0) return;
         if (padOnly) {
             padRect.set(margin, margin, w - margin, h - margin);
+            pad.setPadBounds(padRect);
             return;
         }
         boolean land = w > h;
@@ -160,16 +178,20 @@ public class ControlPadView extends View {
         }
         float padLeft = margin + toggleW + (compact ? 0f : gap);
         padRect.set(padLeft, margin, padLeft + padW, margin + mainH);
+        // Edge push needs the real pad rectangle, not the whole view.
+        pad.setPadBounds(padRect);
         scrollUpRect.set(padRect.right + gap, margin, margin + contentW, margin + (mainH - gap) / 2f);
         scrollDownRect.set(scrollUpRect.left, scrollUpRect.bottom + gap, scrollUpRect.right, margin + mainH);
         updateSensChip();
 
         float navTop = margin + mainH + gap;
         float navBottom = margin + contentH;
-        float cellW = (contentW - gap * 2f) / 3f;
+        // Four cells since v0.39.0: 返回 / 主页 / 后台 + the configurable middle key.
+        float cellW = (contentW - gap * 3f) / 4f;
         backRect.set(margin, navTop, margin + cellW, navBottom);
         homeRect.set(backRect.right + gap, navTop, backRect.right + gap + cellW, navBottom);
-        recentsRect.set(homeRect.right + gap, navTop, margin + contentW, navBottom);
+        recentsRect.set(homeRect.right + gap, navTop, homeRect.right + gap + cellW, navBottom);
+        middleRect.set(recentsRect.right + gap, navTop, margin + contentW, navBottom);
     }
 
     @Override
@@ -181,7 +203,7 @@ public class ControlPadView extends View {
         if (padOnly) {
             canvas.drawRoundRect(padRect, cardRadius, cardRadius, cardPaint);
             Ui.textCenter(canvas, "触控区", padRect.centerX(), padRect.centerY() - Ui.dp(getContext(), 13), hintPaint);
-            Ui.textCenter(canvas, "单指移动 · 点击=左键 · 双指滚动", padRect.centerX(),
+            Ui.textCenter(canvas, "单指移动 · 点击=左键 · 双指=滚动 / 右键", padRect.centerX(),
                     padRect.centerY() + Ui.dp(getContext(), 14), hintPaint);
             return;
         }
@@ -207,9 +229,10 @@ public class ControlPadView extends View {
 
         canvas.drawRoundRect(padRect, cardRadius, cardRadius, cardPaint);
         Ui.textCenter(canvas, "触控区", padRect.centerX(), padRect.centerY() - Ui.dp(getContext(), 13), hintPaint);
-        Ui.textCenter(canvas, "单指移动 · 点击=左键 · 双指滚动", padRect.centerX(),
+        Ui.textCenter(canvas, "单指移动 · 点击=左键 · 双指=滚动 / 右键", padRect.centerX(),
                 padRect.centerY() + Ui.dp(getContext(), 14), hintPaint);
         drawSensChip(canvas);
+        drawGestChip(canvas);
 
         drawKey(canvas, scrollUpRect, pressedKey == PRESS_SCROLL_UP);
         drawKey(canvas, scrollDownRect, pressedKey == PRESS_SCROLL_DOWN);
@@ -222,6 +245,9 @@ public class ControlPadView extends View {
         Icons.draw(canvas, Icons.BACK, iconBox(backRect), icon);
         Icons.draw(canvas, Icons.HOME, iconBox(homeRect), icon);
         Icons.draw(canvas, Icons.RECENTS, iconBox(recentsRect), icon);
+        drawKey(canvas, middleRect, pressedKey == PRESS_MIDDLE);
+        Ui.textCenter(canvas, PadGestures.middleLabel(getContext()), middleRect.centerX(),
+                middleRect.centerY() + Ui.dp(getContext(), 4), middleTextPaint);
     }
 
     /** 「灵敏度 1.0x」 pill in the top-left corner of the trackpad card (touchpad page only). */
@@ -235,6 +261,15 @@ public class ControlPadView extends View {
         float left = padRect.left + Ui.dp(getContext(), 10);
         float top = padRect.top + Ui.dp(getContext(), 10);
         sensChipRect.set(left, top, left + chipW, top + chipH);
+        // The gesture switch sits right next to the sensitivity chip: one tap turns every
+        // gesture off (and back on) without opening any dialog.
+        float gestW = Ui.dp(getContext(), 82);
+        float gestLeft = sensChipRect.right + Ui.dp(getContext(), 8);
+        if (gestLeft + gestW < padRect.right - Ui.dp(getContext(), 8)) {
+            gestChipRect.set(gestLeft, top, gestLeft + gestW, top + chipH);
+        } else {
+            gestChipRect.setEmpty();
+        }
     }
 
     private boolean showSensChip() {
@@ -248,6 +283,17 @@ public class ControlPadView extends View {
         canvas.drawRoundRect(sensChipRect, Ui.dp(getContext(), 13), Ui.dp(getContext(), 13), sensStrokePaint);
         Ui.textCenter(canvas, "灵敏度 " + PointerSettings.speedLabel(getContext()),
                 sensChipRect.centerX(), sensChipRect.centerY() + Ui.dp(getContext(), 4), sensTextPaint);
+    }
+
+    /** 「手势 开 / 关」 chip — the one-tap master switch for the v0.39.0 gesture set. */
+    private void drawGestChip(Canvas canvas) {
+        if (gestChipRect.isEmpty()) return;
+        float radius = Ui.dp(getContext(), 13);
+        canvas.drawRoundRect(gestChipRect, radius, radius, gestBgPaint);
+        boolean on = PadGestures.on();
+        if (on) canvas.drawRoundRect(gestChipRect, radius, radius, gestStrokePaint);
+        Ui.textCenter(canvas, on ? "手势 开" : "手势 关", gestChipRect.centerX(),
+                gestChipRect.centerY() + Ui.dp(getContext(), 4), on ? gestOnPaint : gestOffPaint);
     }
 
     private void drawKey(Canvas canvas, RectF rect, boolean pressed) {
@@ -351,6 +397,17 @@ public class ControlPadView extends View {
                     showSensitivityDialog();
                     return true;
                 }
+                if (!gestChipRect.isEmpty() && gestChipRect.contains(x, y)) {
+                    boolean next = !PadGestures.on();
+                    PadGestures.setOn(getContext(), next);
+                    haptic();
+                    invalidate();
+                    android.widget.Toast.makeText(getContext(),
+                            next ? "已开启触控板手势"
+                                    : "已关闭触控板手势（只剩移动 / 点击 / 双指滚动）",
+                            android.widget.Toast.LENGTH_SHORT).show();
+                    return true;
+                }
                 if (scrollUpRect.contains(x, y)) {
                     startScroll(1);
                     return true;
@@ -377,6 +434,24 @@ public class ControlPadView extends View {
                     pressedKey = PRESS_RECENTS;
                     haptic();
                     hid.tapCombo(HidConstants.MOD_LEFT_GUI, HidConstants.KEY_TAB);
+                    invalidate();
+                    return true;
+                }
+                if (middleRect.contains(x, y)) {
+                    pressedKey = PRESS_MIDDLE;
+                    haptic();
+                    // 电脑模式 always sends the mouse middle button: Windows uses it (open in a new
+                    // tab); on Android the key can be re-pointed at 返回 / 主页 where middle does
+                    // nothing at all.
+                    int m = PadGestures.pcMode(getContext())
+                            ? PadGestures.MIDDLE_MOUSE : PadGestures.middle();
+                    if (m == PadGestures.MIDDLE_BACK) {
+                        hid.tapConsumer(HidConstants.CONSUMER_AC_BACK);
+                    } else if (m == PadGestures.MIDDLE_HOME) {
+                        hid.tapConsumer(HidConstants.CONSUMER_AC_HOME);
+                    } else {
+                        hid.mouseClick(MOUSE_MIDDLE);
+                    }
                     invalidate();
                     return true;
                 }

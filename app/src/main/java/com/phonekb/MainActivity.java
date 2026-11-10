@@ -31,6 +31,7 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -162,6 +163,7 @@ public class MainActivity extends Activity {
         Ui.setSimulation(simWidthDp, simFontScale);
         Ui.init(this);
         PointerSettings.init(this);
+        PadGestures.init(this);
         // Draw edge-to-edge and let installInsetsPadding() turn the reported insets into
         // padding. That is the only reliable way to be correct on notch/gesture-bar devices.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -288,7 +290,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         footer = new TextView(this);
-        footer.setText("PhoneKB v0.37.8 · 蓝牙 HID · 平板 / 电脑 · 键盘 / 触控板 / 媒体 / 手柄");
+        footer.setText("PhoneKB v0.39.0 · 蓝牙 HID · 平板 / 电脑 · 键盘 / 触控板 / 媒体 / 手柄");
         footer.setTextColor(Ui.TEXT_DIM);
         footer.setTextSize(11);
         footer.setGravity(Gravity.CENTER);
@@ -1332,10 +1334,11 @@ public class MainActivity extends Activity {
                         + "手机布局：和普通手机键盘一样（数字行 1-0、qwerty、Shift / ⌫、Space / Enter），左下「符号」进入符号页，符号页左下「ABC」返回字母；数字行也可以用来选中文输入法的候选词。\n\n"
                         + "电脑布局：顶部一排快捷键 Ctrl+C / Ctrl+V / Ctrl+X / Ctrl+A / Alt+Tab，下面带 Tab、方向键和 Ctrl / Alt / Win，适合敲命令、远程桌面和组合键。\n\n"
                         + "指针灵敏度：触控板页触控卡片左上角的「灵敏度 1.0x」胶囊可以打开设置——指针速度 0.4x–2.5x（1.0x 就是以前的手感）、加速度（快扫自动加速）、滚轮速度（一次滑动滚几行）；改完对触控板页、触控板浮层、手柄页触控区同时生效，并且会记住。\n\n"
+                        + "触控板手势（v0.39.0）：单指点击=左键，双指点击=右键，双指上下滑=滚动（甩一下还会惯性继续滑）；刚点完再按住就能拖着走（点按拖动），松手后左键还按着、下次点击才放下（拖拽锁定，选文字和拖文件很好用）；手指推到触控区边缘会继续加速（边缘续推）；手掌贴屏幕不会乱跳（误触抑制）。平板模式下：双指右滑=返回，三指下滑=主页，三指上滑 / 左右滑=多任务。电脑模式下：双指横滑=横向滚动，双指右滑=后退、左滑=前进，三指上=任务视图、下=显示桌面、左右=切窗口，四指左右=切换虚拟桌面，捏合=Ctrl+滚轮缩放。每一项都在「帮助 → 更多设置 → 触控板手势」里单独开关，触控区左上角还有一颗「手势 开 / 关」胶囊可以一键全关。\n\n"
                         + "触控板：单指滑动移动指针，单指点击=左键，双指点击=右键，双指上下滑=滚动，右侧 ↑↓ 按住连续滚动；左侧「数字」弹出数字键盘（输入密码），「键盘」弹出简易手机键盘（带数字行，数字也可用来选输入法的候选词），「菜单」等于平板菜单键。\n\n"
                         + "媒体页：从上到下是「触控板」快键、媒体卡和常用键卡。媒体卡第一排三个大方键：上一段 ⏮ / 播放暂停 ⏯ / 下一段 ⏭；第二排两个长条：−10s / ＋10s，发的是方向键 ← / →，点一次快退或快进 10 秒，按住连续快退 / 快进（长按约 0.4 秒后每 0.1 秒发一次），上一段 / 下一段键按住也会连续跳。\n\n"
                         + "常用键卡是 2 行 × 5 列的圆形大键：第一排 音量+ / 音量− / 静音 / 截屏 / 多任务，第二排 亮度− / 亮度+ / 返回 / 主页 / 菜单。截屏发的是蓝牙键盘的 PrintScreen 键，Android 会直接截屏；多任务发 Alt+Tab（系统「切换应用」快捷键）。\n\n"
-                        + "「帮助 → 更多设置」里可以调：指针点击方式（抬手点击 / 按下即点）、长按拖拽阈值（250 / 350 / 450 ms）、极速模式（少震动、移动中不重绘，更跟手）、界面大小，以及指针延迟测量。\n\n"
+                        + "「帮助 → 更多设置」里可以调：指针点击方式（抬手点击 / 按下即点）、指针上报节奏、触控板手势（开关与详细设置）、长按拖拽阈值（250 / 350 / 450 ms）、极速模式（少震动、移动中不重绘，更跟手）、界面大小，以及指针延迟测量。\n\n"
                         + "手柄：左上的「移动盘」按钮打开设置，里有三个段：「布局」可选 浮键 / 皮肤；「移动盘类型」按键 / 圆盘 / 摇杆；「移动盘大小」「按键大小」两个 60%–150% 滑块（只缩放按键本身）。浮键＝现在这套：左下方向盘、右下 X/Y/A/B、两侧中段 L1/R1、菜单键在顶部条；皮肤＝整机手柄外观：圆角机身 + 十字键圆环 + ABXY 圆环 + LB/LT/RB/RT + 左右 L/R 模拟摇杆（摇杆是 4 个轴，换新版后平板要「忘记设备→重新配对」一次才会识别）+ 居中的 SELECT/START。自定义位置：在设置里点「编辑布局·拖动按键改位置」，或者在手柄页空白处按住 3 秒，进入编辑模式后每个键出现蓝虚线框，单指拖动即可挪位置，松手自动保存；顶部有「重置 / 完成」，横屏和竖屏各存一套。「触控」小键一键切换 关 / 中间 / 全屏：中间＝页面正中一块看得见边界的触控板；全屏＝除按键外整片空白都能触控。触控板手势和「触控板」页一致：单指移动、轻点＝左键、双指点击＝右键、双指上下滑＝滚动；「只移动」档位下只移指针不点击。浮键布局下也有一行四个肩键：L1 / LT（左）与 RT / R1（右），皮肤布局则是 LB/LT/RB/RT；如果老游戏只认 L1/R1、不认 LT/RT，可以在「帮助 → 更多设置 → 手柄 LT / RT 兼容」打开，让 LT/RT 同时发 L1/R1。移动盘类型选「摇杆」时，整块圆盘都能按、摇杆头跟手，推的是左摇杆 X/Y 模拟轴；只有当游戏只认方向键时才把「摇杆同时发方向键」打开（打开后左上斜向会退化成左）。\n\n"
                         + "按键映射：手柄设置里点「按键映射 · 每个键改成别的功能」，列出的 14 个键（方向键、A/B/X/Y、L1/R1/LT/RT、SELECT/START）都能改成别的东西——点一行，再从「不发送 / 手柄按键 / 方向键 / 键盘键 / 鼠标左中右 / 媒体键」里挑一个目标。某个游戏不认手柄的某个键时最有用：把那个键改成「键盘 空格」或「鼠标 左键」，游戏里立刻就能用。三套配置（配置 1/2/3）可以给不同游戏，切换立即生效并记住；「恢复默认」只重置当前这套。下面的「面键布局」Xbox / PS / Switch 只换按键上印的字和 A/B、X/Y 的位置（Switch 习惯把 A 和 B、X 和 Y 对调），跟映射改的「实际发什么」互不冲突。\n\n"
                         + "手柄页触控板浮层：右上角的「触控板」小键点一下，右侧浮出一块触控板浮层（单指移动、轻点＝左键、双指点击＝右键、双指滑＝滚动），右下角竖排是 返回 / 主页 / 后台。点浮层外面的任何地方就会收起，左半屏的方向盘和 ABXY 照样能按；再点一次「触控板」收起。浮层左上角有个「⇔」把手：按住约 0.3 秒后左右拖动可以挪动整块浮层的位置，松手就记住，下次打开还在那儿。\n\n"
@@ -1403,6 +1406,22 @@ public class MainActivity extends Activity {
             toast("指针节奏已改为每 " + gapValues[index] + " ms 一份报告");
         });
 
+        addSettingsLabel(box, "触控板手势（拖动 / 惯性 / 三指四指 / 捏合）");
+        addSettingsChoice(box, new String[]{"全部关闭", "开启（默认）"}, PadGestures.on() ? 1 : 0,
+                index -> {
+                    PadGestures.setOn(this, index == 1);
+                    refreshPads();
+                });
+        addSettingsChoice(box, new String[]{"手势详细设置…", "恢复默认手势"}, -1, index -> {
+            if (index == 0) {
+                showGestureDialog();
+            } else {
+                PadGestures.resetAll(this);
+                refreshPads();
+                toast("已恢复默认手势设置");
+            }
+        });
+
         addSettingsLabel(box, "长按拖拽阈值");
         final int[] pressValues = {250, 350, 450};
         int pressIndex = 1;
@@ -1457,6 +1476,185 @@ public class MainActivity extends Activity {
                 .setView(scroll)
                 .setPositiveButton("关闭", null)
                 .show();
+    }
+
+    /** Gesture switches (v0.39.0): every switch that changes what the touch surface recognises. */
+    private void showGestureDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int side = Ui.dpi(this, 18);
+        box.setPadding(side, Ui.dpi(this, 6), side, 0);
+
+        TextView gtitle = new TextView(this);
+        gtitle.setText("触控板手势");
+        gtitle.setTextColor(Ui.TEXT);
+        gtitle.setTextSize(17f);
+        gtitle.setTypeface(null, android.graphics.Typeface.BOLD);
+        gtitle.setPadding(0, Ui.dpi(this, 4), 0, Ui.dpi(this, 10));
+        box.addView(gtitle, 0);
+        addSettingsLabel(box, "总开关（关掉后只剩移动 / 点击 / 双指滚动，最适合玩游戏时防误触）");
+        addSettingsChoice(box, new String[]{"全部关闭", "开启（默认）"}, PadGestures.on() ? 1 : 0,
+                index -> {
+                    PadGestures.setOn(this, index == 1);
+                    refreshPads();
+                });
+
+        addSettingsLabel(box, "点按拖动（刚点完再按住就能拖，不用等长按）");
+        addSettingsChoice(box, new String[]{"关", "开（默认）"}, PadGestures.tapDrag() ? 1 : 0,
+                index -> {
+                    PadGestures.setTapDrag(this, index == 1);
+                    refreshPads();
+                });
+
+        addSettingsLabel(box, "拖拽锁定（松手后左键还按着，下次点击才放下——选文字 / 拖文件很好用）");
+        addSettingsChoice(box, new String[]{"关", "开（默认）"}, PadGestures.dragLock() ? 1 : 0,
+                index -> {
+                    PadGestures.setDragLock(this, index == 1);
+                    refreshPads();
+                });
+
+        addSettingsLabel(box, "惯性滚动（双指甩一下，松手后继续滑一节）");
+        addSettingsChoice(box, new String[]{"关", "开（默认）"}, PadGestures.fling() ? 1 : 0,
+                index -> {
+                    PadGestures.setFling(this, index == 1);
+                    refreshPads();
+                });
+
+        addSettingsLabel(box, "自然滚动方向（内容跟着手指走，和手机一致）");
+        addSettingsChoice(box, new String[]{"关（默认，和以前一样）", "开"},
+                PadGestures.natural() ? 1 : 0,
+                index -> {
+                    PadGestures.setNatural(this, index == 1);
+                    refreshPads();
+                });
+
+        addSettingsLabel(box, "边缘续推（推到触控区边缘后继续加速，不用抬手重划）");
+        addSettingsChoice(box, new String[]{"关", "开（默认）"}, PadGestures.edge() ? 1 : 0,
+                index -> {
+                    PadGestures.setEdge(this, index == 1);
+                    refreshPads();
+                });
+
+        addSettingsLabel(box, "误触抑制（手掌 / 一大片贴在屏幕上时不响应）");
+        addSettingsChoice(box, new String[]{"关", "开（默认）"}, PadGestures.palm() ? 1 : 0,
+                index -> {
+                    PadGestures.setPalm(this, index == 1);
+                    refreshPads();
+                });
+
+        addSettingsLabel(box, "捏合 = Ctrl + 滚轮（缩放网页 / 图片；先试试自己的 App 认不认）");
+        addSettingsChoice(box, new String[]{"关（默认）", "开"}, PadGestures.pinch() ? 1 : 0,
+                index -> {
+                    PadGestures.setPinch(this, index == 1);
+                    refreshPads();
+                });
+
+        addSettingsLabel(box, "电脑模式：双指横滑 = Shift + 滚轮（横向滚动）");
+        addSettingsChoice(box, new String[]{"关", "开（默认）"}, PadGestures.pcHScroll() ? 1 : 0,
+                index -> {
+                    PadGestures.setPcHScroll(this, index == 1);
+                    refreshPads();
+                });
+
+        addSettingsLabel(box, "双指横滑动作（平板：右滑=返回；电脑：右滑=后退、左滑=前进）");
+        addSettingsChoice(box, new String[]{"关", "开（默认）"}, PadGestures.pcBack() ? 1 : 0,
+                index -> {
+                    PadGestures.setPcBack(this, index == 1);
+                    refreshPads();
+                });
+
+        addSettingsLabel(box, "三指手势（平板：下滑=主页、上滑和左右=多任务；电脑：上=任务视图、下=显示桌面、左右=切窗口）");
+        addSettingsChoice(box, new String[]{"关", "开（默认）"}, PadGestures.three() ? 1 : 0,
+                index -> {
+                    PadGestures.setThree(this, index == 1);
+                    refreshPads();
+                });
+
+        addSettingsLabel(box, "四指左右（电脑模式：切换虚拟桌面）");
+        addSettingsChoice(box, new String[]{"关（默认）", "开"}, PadGestures.four() ? 1 : 0,
+                index -> {
+                    PadGestures.setFour(this, index == 1);
+                    refreshPads();
+                });
+
+        addSettingsLabel(box, "触控板页那颗「中键」发送什么（平板上鼠标中键本来没反应，可以改成返回 / 主页）");
+        addSettingsChoice(box, new String[]{"鼠标中键", "返回", "主页"},
+                Math.max(0, Math.min(2, PadGestures.middle())), index -> {
+                    PadGestures.setMiddle(this, index);
+                    refreshPads();
+                });
+
+        addSettingsLabel(box, "批量操作");
+        addSettingsChoice(box, new String[]{"恢复默认手势", "全部关闭"}, -1, index -> {
+            if (index == 0) {
+                PadGestures.resetAll(this);
+                toast("已恢复默认手势设置");
+            } else {
+                PadGestures.setOn(this, false);
+                toast("已关闭全部触控板手势");
+            }
+            refreshPads();
+        });
+
+        // 结构和「手柄设置 / 按键映射」弹窗一致：整块内容在 ScrollView 里滚（标题也在里面），
+        // 按钮固定在底部。用 AlertDialog 的话横屏只会渲染出前两行，所以这里用自定义 Dialog。
+        final Dialog dialog = new Dialog(this);
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(false);
+        scroll.addView(box);
+
+        LinearLayout bottom = new LinearLayout(this);
+        bottom.setOrientation(LinearLayout.HORIZONTAL);
+        bottom.setPadding(0, Ui.dpi(this, 10), 0, 0);
+
+        TextView close = new TextView(this);
+        close.setText("关闭");
+        close.setTextColor(Ui.ACCENT);
+        close.setTextSize(12.5f);
+        close.setGravity(Gravity.CENTER);
+        close.setPadding(0, Ui.dpi(this, 10), 0, Ui.dpi(this, 10));
+        close.setBackground(Ui.roundedStroke(this, Ui.SURFACE_2, Ui.ACCENT, 1.2f, 12));
+        close.setOnClickListener(v -> {
+            refreshPads();
+            dialog.dismiss();
+        });
+        bottom.addView(close, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout outer = new LinearLayout(this);
+        outer.setOrientation(LinearLayout.VERTICAL);
+        outer.setBackground(Ui.rounded(this, Ui.SURFACE, 18));
+        outer.setPadding(Ui.dpi(this, 6), Ui.dpi(this, 16), Ui.dpi(this, 6), Ui.dpi(this, 12));
+        outer.addView(scroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        LinearLayout.LayoutParams bottomLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        bottomLp.leftMargin = Ui.dpi(this, 12);
+        bottomLp.rightMargin = Ui.dpi(this, 12);
+        outer.addView(bottom, bottomLp);
+        dialog.setContentView(outer);
+
+        Window gw = dialog.getWindow();
+        if (gw != null) {
+            gw.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            gw.setDimAmount(0.55f);
+            gw.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+            WindowManager.LayoutParams lp = new WindowManager.LayoutParams();
+            lp.copyFrom(gw.getAttributes());
+            lp.width = Ui.dpi(this, landscape ? 392 : 330);
+            int screenH = getResources().getDisplayMetrics().heightPixels;
+            lp.height = landscape ? Math.round(screenH * 0.86f)
+                    : WindowManager.LayoutParams.WRAP_CONTENT;
+            gw.setAttributes(lp);
+        }
+        dialog.show();
+    }
+
+    /** Repaints every trackpad surface after a gesture / pointer setting changed. */
+    private void refreshPads() {
+        if (touchpadView != null) touchpadView.invalidate();
+        if (splitPadView != null) splitPadView.invalidate();
+        if (overlayTouchpad != null) overlayTouchpad.invalidate();
     }
 
     // ------------------------------------------------------------ 设备切换
@@ -2033,6 +2231,10 @@ public class MainActivity extends Activity {
                 else if (gpmap == 2) gamepadView.debugShowTargetPicker(HidConstants.GP_A);
                 else if (gpmap == 3) gamepadView.debugMappingSelfTest();
             }, 1600);
+        }
+        // Debug/test hook: open the gesture settings dialog so it can be screenshotted.
+        if (intent.getIntExtra("pgdlg", 0) == 1) {
+            new Handler(Looper.getMainLooper()).postDelayed(this::showGestureDialog, 1600);
         }
         // Debug/test hook: the floating touch pad overlay (adb cannot tap it) and its offset.
         if (gamepadView != null && intent.hasExtra("gptp")) {
