@@ -8,6 +8,7 @@ import android.graphics.RectF;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.util.Log;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
@@ -463,8 +464,13 @@ public class ControlPadView extends View {
     }
 
     /**
-     * 滚轮条按下（v0.39.2）：立刻发一格（点一下 = 一格，和以前一样），同时预备「按住不动
-     * 就慢速连滚」；手指一旦上下拖动就切成跟手滚轮，并取消连滚。
+     * 滚轮条按下：
+     * <ul>
+     *   <li><b>抓住滑块（grab = true）</b>：v0.40.2 起 <b>彻底屏蔽上下键</b> —— 不发任何滚轮
+     *       报文、不点箭头、也不排连滚，只有手指真的移动满一格才发（完全跟手）。</li>
+     *   <li><b>点箭头 / 点轨道空白（grab = false）</b>：立刻发一格，并把箭头点亮；按住 150 ms
+     *       后进入连续慢滚。</li>
+     * </ul>
      *
      * @param tapDir 点一下要发哪一格（上半区 = +1 往上，下半区 = -1 往下）
      * @param grab   手指是不是按在滑块上：只有 true 才会跟着手指拖动
@@ -480,11 +486,23 @@ public class ControlPadView extends View {
         stripVel = 0f;
         stripTicks = 0;
         stripLastY = y;
-        if (grab) stripTouchY = y; // 没抓住滑块就别挪它
         stripLastAt = SystemClock.uptimeMillis();
+        haptic();
+        if (grab) {
+            // 抓滑块：上下键完全静默（不发格、不亮箭头、不排连滚），滑块跟着手指走。
+            stripTouchY = y;
+            scrollDir = 0;
+            pressedKey = -1;
+            handler.removeCallbacks(scrollRepeat);
+            if (HidManager.timingLogging()) {
+                Log.i("PhoneKB-Pad", "strip grab press: arrows muted, no wheel");
+            }
+            invalidate();
+            return;
+        }
+        stripTouchY = y; // 点箭头 / 轨道：滑块留在中间，这里只是记录手指位置
         scrollDir = tapDir;
         pressedKey = tapDir > 0 ? PRESS_SCROLL_UP : PRESS_SCROLL_DOWN;
-        haptic();
         hid.mouseWheel(tapDir);
         handler.removeCallbacks(scrollRepeat);
         // 第一次重复稍微等一会儿：先把「点一下」和「按住」区分开，再进入连续慢速滚动
@@ -523,7 +541,10 @@ public class ControlPadView extends View {
             handler.removeCallbacks(scrollRepeat);
             scrollDir = 0;
         }
-        pressedKey = steps > 0 ? PRESS_SCROLL_UP : PRESS_SCROLL_DOWN;
+        // v0.40.2：拖滑块时不点亮任何箭头（箭头只属于「点箭头 / 点轨道」的那条路）。
+        if (HidManager.timingLogging()) {
+            Log.i("PhoneKB-Pad", "strip drag steps=" + steps + " (arrows stay dark)");
+        }
         enqueueStrip(steps);
         invalidate();
     }
@@ -643,7 +664,7 @@ public class ControlPadView extends View {
         stripGrab = true;
         stripDragged = true;
         stripTouchY = stripRect.top + stripRect.height() * p / 100f;
-        pressedKey = PRESS_SCROLL_DOWN;
+        pressedKey = -1; // v0.40.2：拖滑块时上下键不点亮
         invalidate();
         handler.postDelayed(() -> {
             stripDown = false;
@@ -669,6 +690,17 @@ public class ControlPadView extends View {
             pressedKey = -1;
             invalidate();
         }, 4000);
+    }
+
+    /**
+     * 调试用（v0.40.2）：走真实的「抓住滑块按下」路径 —— 用来证明这时候
+     * 一个滚轮报文都不发（配 --ei hidlog 1 看 logcat 里有没有 sent id=3）、箭头也不亮。
+     */
+    public void debugGrabPress() {
+        if (stripRect.isEmpty()) return;
+        float y = stripRect.centerY() + Ui.dp(getContext(), 6);
+        beginStrip(y, +1, true);
+        handler.postDelayed(() -> endStrip(false), 6000); // long enough to screenshot
     }
 
     private void resetPressed() {

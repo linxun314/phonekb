@@ -101,6 +101,11 @@ public final class HidManager {
         timingLog = on;
     }
 
+    /** Read-only view of {@link #setTimingLog(boolean)} so views can log without an instance. */
+    public static boolean timingLogging() {
+        return timingLog;
+    }
+
     /** A/B switch: true restores the pre-0.26 fire-and-forget sender (used to measure the gain). */
     private static volatile boolean legacySend;
 
@@ -1067,6 +1072,7 @@ public final class HidManager {
     }
 
     public void mouseWheel(int steps) {
+        if (timingLog && steps != 0) Log.i("PhoneKB-HID", "wheel steps=" + steps);
         while (steps != 0) {
             int s = Math.max(-127, Math.min(127, steps));
             byte[] r = new byte[4];
