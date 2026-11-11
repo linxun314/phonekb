@@ -15,8 +15,8 @@ import android.view.View;
 
 /**
  * Touchpad page: overlay toggles on the left (digits / keyboard / menu), the trackpad in
- * the middle, a scroll column on the right and 返回 / 主页 / 后台 icon keys at the
- * bottom, following the Bluetooth Remote layout.
+ * the middle, a scroll column on the right and 返回 / 主页 / 后台 + 上一集 / 下一集 keys at
+ * the bottom, following the Bluetooth Remote layout.
  *
  * A compact instance (left column hidden) is used by the touchpad overlay that opens
  * from the keyboard page. It keeps the same gestures and the same bottom nav keys.
@@ -40,9 +40,13 @@ public class ControlPadView extends View {
     private static final int PRESS_SCROLL_UP = 5;
     private static final int PRESS_SCROLL_DOWN = 6;
     private static final int PRESS_MENU = 7;
-    private static final int PRESS_MIDDLE = 8;
+    /** 底部导航新增的两颗翻页键（v0.40.3，红果 / 抖音那种整页上下切）。 */
+    private static final int PRESS_PREV = 8;
+    private static final int PRESS_NEXT = 9;
 
-    private static final int MOUSE_MIDDLE = 4;
+    /** 按住翻页键后的第一下重复延迟与之后的节拍（每一下 = 一次方向键）。 */
+    private static final int FLIP_HOLD_DELAY_MS = 420;
+    private static final int FLIP_REPEAT_MS = 200;
 
     private final HidManager hid;
     private final PadController pad;
@@ -75,14 +79,17 @@ public class ControlPadView extends View {
     private final RectF backRect = new RectF();
     private final RectF homeRect = new RectF();
     private final RectF recentsRect = new RectF();
-    private final RectF middleRect = new RectF();
+    private final RectF prevRect = new RectF();
+    private final RectF nextRect = new RectF();
     private final RectF sensChipRect = new RectF();
     private final RectF gestChipRect = new RectF();
     private final Paint gestBgPaint = Ui.fill(Ui.SURFACE_2);
     private final Paint gestStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint gestOnPaint;
     private final Paint gestOffPaint;
-    private final Paint middleTextPaint;
+    private final Paint flipTextPaint;
+    private final Paint flipStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint flipChevPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     // 苹果风格滚轮条（v0.40.0，F 版 macOS 胶囊滑块）：磨砂胶囊轨道 + 顶部一道高光 +
     // 上下细 chevron + 一根常驻的 30 dp 磨砂白滑块（中间三条细纹）；按住拖动时滑块变亮并跟随手指。
     private final Paint stripTrackPaint = Ui.fill(stripBlend(0xFFFFFF, 0.07f, Ui.SURFACE));
@@ -142,6 +149,22 @@ public class ControlPadView extends View {
                 hid.mouseWheel(scrollDir);
                 handler.postDelayed(this, PointerSettings.scrollHoldMs());
             }
+        }
+    };
+
+    /** 底部「上一集 / 下一集」：+1 = 上一集（方向键 ↑），-1 = 下一集（方向键 ↓），0 = 没按住。 */
+    private int flipDir;
+
+    /**
+     * 按住翻页键：先发一下，停 FLIP_HOLD_DELAY_MS 后开始每 FLIP_REPEAT_MS 发一下，
+     * 等于「长按连续翻」。红果短剧 / 抖音这类整页上下切的 App 只认方向键。
+     */
+    private final Runnable flipRepeat = new Runnable() {
+        @Override
+        public void run() {
+            if (flipDir == 0) return;
+            sendFlip(flipDir);
+            handler.postDelayed(this, FLIP_REPEAT_MS);
         }
     };
 
@@ -244,7 +267,15 @@ public class ControlPadView extends View {
         stripChevPaint.setColor(0x8CFFFFFF);
         gestOnPaint = Ui.text(context, 11, Ui.ACCENT);
         gestOffPaint = Ui.text(context, 11, Ui.TEXT_DIM);
-        middleTextPaint = Ui.text(context, 12, Ui.TEXT);
+        flipTextPaint = Ui.text(context, 11, Ui.ACCENT);
+        flipStrokePaint.setStyle(Paint.Style.STROKE);
+        flipStrokePaint.setStrokeWidth(Ui.dp(context, 1.2f));
+        flipStrokePaint.setColor(Ui.ACCENT);
+        flipChevPaint.setStyle(Paint.Style.STROKE);
+        flipChevPaint.setStrokeCap(Paint.Cap.ROUND);
+        flipChevPaint.setStrokeJoin(Paint.Join.ROUND);
+        flipChevPaint.setStrokeWidth(Ui.dp(context, 1.8f));
+        flipChevPaint.setColor(Ui.ACCENT);
         PointerSettings.init(context);
         PadGestures.init(context);
     }
@@ -297,12 +328,15 @@ public class ControlPadView extends View {
 
         float navTop = margin + mainH + gap;
         float navBottom = margin + contentH;
-        // Four cells since v0.39.0: 返回 / 主页 / 后台 + the configurable middle key.
-        float cellW = (contentW - gap * 3f) / 4f;
+        // Five cells since v0.40.3: 返回 / 主页 / 后台 / 上一集 / 下一集.
+        // The middle key was dropped (Android tablets ignore the mouse middle button) and the
+        // freed slot went to the two page-flip keys that 红果短剧 / 抖音 actually react to.
+        float cellW = (contentW - gap * 4f) / 5f;
         backRect.set(margin, navTop, margin + cellW, navBottom);
         homeRect.set(backRect.right + gap, navTop, backRect.right + gap + cellW, navBottom);
         recentsRect.set(homeRect.right + gap, navTop, homeRect.right + gap + cellW, navBottom);
-        middleRect.set(recentsRect.right + gap, navTop, margin + contentW, navBottom);
+        prevRect.set(recentsRect.right + gap, navTop, recentsRect.right + gap + cellW, navBottom);
+        nextRect.set(prevRect.right + gap, navTop, margin + contentW, navBottom);
     }
 
     @Override
@@ -353,9 +387,8 @@ public class ControlPadView extends View {
         Icons.draw(canvas, Icons.BACK, iconBox(backRect), icon);
         Icons.draw(canvas, Icons.HOME, iconBox(homeRect), icon);
         Icons.draw(canvas, Icons.RECENTS, iconBox(recentsRect), icon);
-        drawKey(canvas, middleRect, pressedKey == PRESS_MIDDLE);
-        Ui.textCenter(canvas, PadGestures.middleLabel(getContext()), middleRect.centerX(),
-                middleRect.centerY() + Ui.dp(getContext(), 4), middleTextPaint);
+        drawFlipKey(canvas, prevRect, pressedKey == PRESS_PREV, true, "上一集");
+        drawFlipKey(canvas, nextRect, pressedKey == PRESS_NEXT, false, "下一集");
     }
 
     /** 「灵敏度 1.0x」 pill in the top-left corner of the trackpad card (touchpad page only). */
@@ -407,6 +440,44 @@ public class ControlPadView extends View {
     private void drawKey(Canvas canvas, RectF rect, boolean pressed) {
         if (rect.isEmpty()) return;
         canvas.drawRoundRect(rect, keyRadius, keyRadius, pressed ? pressPaint : keyPaint);
+    }
+
+    /** 底部导航的「上一集 / 下一集」：药丸键 + 蓝色描边 + 小 chevron + 11 sp 标签。 */
+    private void drawFlipKey(Canvas canvas, RectF rect, boolean pressed, boolean up, String label) {
+        if (rect.isEmpty()) return;
+        drawKey(canvas, rect, pressed);
+        canvas.drawRoundRect(rect, keyRadius, keyRadius, flipStrokePaint);
+        float cx = rect.centerX();
+        float cy = rect.centerY() - Ui.dp(getContext(), 7f);
+        float half = Ui.dp(getContext(), 5f);
+        float dy = Ui.dp(getContext(), 3.4f);
+        float apexY = up ? cy - dy : cy + dy;
+        float armY = up ? cy + dy : cy - dy;
+        canvas.drawLine(cx - half, armY, cx, apexY, flipChevPaint);
+        canvas.drawLine(cx, apexY, cx + half, armY, flipChevPaint);
+        Ui.textCenter(canvas, label, cx, rect.centerY() + Ui.dp(getContext(), 11f), flipTextPaint);
+    }
+
+    /** 发一次翻页：上一集 = 方向键 ↑，下一集 = 方向键 ↓。 */
+    private void sendFlip(int dir) {
+        if (HidManager.timingLogging()) {
+            Log.i("PhoneKB-Pad", dir > 0 ? "flip prev (KEY_UP)" : "flip next (KEY_DOWN)");
+        }
+        hid.tapKey(0, dir > 0 ? HidConstants.KEY_UP : HidConstants.KEY_DOWN);
+    }
+
+    /** 按下翻页键：立刻切一个，按住才进入连发。 */
+    private void startFlip(int dir) {
+        flipDir = dir;
+        handler.removeCallbacks(flipRepeat);
+        sendFlip(dir);
+        handler.postDelayed(flipRepeat, FLIP_HOLD_DELAY_MS);
+    }
+
+    /** 抬手 / 取消：停掉连发。 */
+    private void stopFlip() {
+        flipDir = 0;
+        handler.removeCallbacks(flipRepeat);
     }
 
     private RectF iconBox(RectF rect) {
@@ -654,6 +725,20 @@ public class ControlPadView extends View {
     }
 
     /**
+     * 调试用：把「上一集 / 下一集」其中一颗按成高亮态（dir 1 = 上一集，2 = 下一集）并真发一次
+     * 方向键，1.5 秒后复原。截图 + logcat 同时可验证（MIUI 上没法用 adb 模拟真实触摸）。
+     */
+    public void debugShowFlip(int dir) {
+        pressedKey = dir == 2 ? PRESS_NEXT : PRESS_PREV;
+        sendFlip(dir == 2 ? -1 : +1);
+        invalidate();
+        handler.postDelayed(() -> {
+            pressedKey = -1;
+            invalidate();
+        }, 1500);
+    }
+
+    /**
      * 调试用：把滚轮条摆成「正在拖动」的样子（pct = 0..100 手指在条上的位置），
      * 4 秒后自动复原。截图验证用，MIUI 上没法用 adb 模拟真实触摸。
      */
@@ -789,21 +874,19 @@ public class ControlPadView extends View {
                     invalidate();
                     return true;
                 }
-                if (middleRect.contains(x, y)) {
-                    pressedKey = PRESS_MIDDLE;
+                if (prevRect.contains(x, y)) {
+                    // 上一集：固定发方向键 ↑（红果短剧 / 抖音整页上下切只认方向键）。
+                    pressedKey = PRESS_PREV;
                     haptic();
-                    // 电脑模式 always sends the mouse middle button: Windows uses it (open in a new
-                    // tab); on Android the key can be re-pointed at 返回 / 主页 where middle does
-                    // nothing at all.
-                    int m = PadGestures.pcMode(getContext())
-                            ? PadGestures.MIDDLE_MOUSE : PadGestures.middle();
-                    if (m == PadGestures.MIDDLE_BACK) {
-                        hid.tapConsumer(HidConstants.CONSUMER_AC_BACK);
-                    } else if (m == PadGestures.MIDDLE_HOME) {
-                        hid.tapConsumer(HidConstants.CONSUMER_AC_HOME);
-                    } else {
-                        hid.mouseClick(MOUSE_MIDDLE);
-                    }
+                    startFlip(+1);
+                    invalidate();
+                    return true;
+                }
+                if (nextRect.contains(x, y)) {
+                    // 下一集：固定发方向键 ↓。
+                    pressedKey = PRESS_NEXT;
+                    haptic();
+                    startFlip(-1);
                     invalidate();
                     return true;
                 }
@@ -825,6 +908,7 @@ public class ControlPadView extends View {
             }
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL: {
+                stopFlip();
                 if (padActive) {
                     boolean handled = pad.onTouch(e);
                     padActive = false;
