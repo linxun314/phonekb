@@ -1,6 +1,7 @@
 package com.phonekb;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.RectF;
@@ -8,7 +9,9 @@ import android.os.Handler;
 import android.os.Looper;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
+import android.util.Log;
 import android.view.View;
+import android.widget.Toast;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -84,6 +87,31 @@ public class MediaView extends View {
             HidConstants.CONSUMER_PLAY_PAUSE,
             HidConstants.CONSUMER_NEXT_TRACK};
 
+    // ---- 上一段 / 下一段发送什么（v0.40.4）----------------------------------------
+    // 红果短剧 / 抖音这类「整页上下切」的 App 不认鼠标滚轮，方向键在很多 App 里也只被当成
+    // 焦点移动，所以让用户自己挑这两颗键到底发什么：媒体键（默认）/ 方向键 / PageUp·PgDn。
+    public static final int SEND_MEDIA = 0;
+    public static final int SEND_ARROW = 1;
+    public static final int SEND_PAGE = 2;
+    private static final int SEND_COUNT = 3;
+    private static final String PREF_SEND = "media_send";
+    private static final String[] SEND_LABELS = {"媒体键", "方向键 ↑↓", "PageUp·PgDn"};
+    /** 非媒体键模式下，⏮ ⏭ 底下的小字。 */
+    private static final String[][] SEND_BAR_LABELS = {
+            {"上一首", "下一首"},
+            {"上一集", "下一集"},
+            {"上一页", "下一页"}};
+    private static int sendMode = SEND_MEDIA;
+    private final RectF[] chipAreas = new RectF[SEND_COUNT];
+    private final RectF sendCaption = new RectF();
+    private final Paint chipBgPaint = Ui.fill(Ui.SURFACE);
+    private final Paint chipOnBgPaint = Ui.fill(0xFF2B3A55);
+    private final Paint chipStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint chipOnTextPaint;
+    private final Paint chipOffTextPaint;
+    private final Paint captionPaint;
+    private final Paint barLabelPaint;
+
     /** Bottom row of the media card: -10s / +10s wide keys, repeat while held. */
     private static final int PILL_COUNT = 2;
     private static final int PILL_BACK = 0;
@@ -133,7 +161,7 @@ public class MediaView extends View {
         @Override
         public void run() {
             if (pressedBar == BAR_PREV || pressedBar == BAR_NEXT) {
-                hid.tapConsumer(BAR_USAGES[pressedBar]);
+                tapBar(pressedBar);
                 handler.postDelayed(this, LONG_REPEAT_MS);
             } else if (pressedPill == PILL_BACK || pressedPill == PILL_FORWARD) {
                 tapSkip(pressedPill == PILL_FORWARD);
@@ -161,6 +189,20 @@ public class MediaView extends View {
         toolpadText.setTextAlign(Paint.Align.CENTER);
         for (int i = 0; i < BAR_COUNT; i++) barAreas[i] = new RectF();
         for (int i = 0; i < PILL_COUNT; i++) pillAreas[i] = new RectF();
+        for (int i = 0; i < SEND_COUNT; i++) chipAreas[i] = new RectF();
+        chipStrokePaint.setStyle(Paint.Style.STROKE);
+        chipStrokePaint.setStrokeWidth(Ui.dp(context, 1.2f));
+        chipStrokePaint.setColor(Ui.ACCENT);
+        chipOnTextPaint = Ui.text(context, 9.5f, Ui.ACCENT);
+        chipOnTextPaint.setTextAlign(Paint.Align.CENTER);
+        chipOffTextPaint = Ui.text(context, 9.5f, Ui.TEXT_DIM);
+        chipOffTextPaint.setTextAlign(Paint.Align.CENTER);
+        captionPaint = Ui.text(context, 9f, Ui.TEXT_DIM);
+        captionPaint.setTextAlign(Paint.Align.LEFT);
+        barLabelPaint = Ui.text(context, 8.5f, Ui.TEXT_DIM);
+        barLabelPaint.setTextAlign(Paint.Align.CENTER);
+        sendMode = prefs(context).getInt(PREF_SEND, SEND_MEDIA);
+        if (sendMode < 0 || sendMode >= SEND_COUNT) sendMode = SEND_MEDIA;
 
         buildKeys();
     }
@@ -248,21 +290,34 @@ public class MediaView extends View {
             keypadCard.set(left + mediaW + gap, contentTop, right, bottom);
             cardTop = contentTop;
         } else {
-            float mediaH = pad * 2 + Ui.dp(getContext(), 62) + gap + pillRowHeight;
-            mediaH = Math.min(mediaH, (bottom - contentTop) * 0.46f);
+            // + 47 dp: the send-mode caption (15) + chip row (26) + the gap under them (6).
+            float mediaH = pad * 2 + Ui.dp(getContext(), 62) + gap + pillRowHeight + Ui.dp(getContext(), 47);
+            mediaH = Math.min(mediaH, (bottom - contentTop) * 0.54f);
             mediaCard.set(left, contentTop, right, contentTop + mediaH);
             keypadCard.set(left, mediaCard.bottom + gap, right, bottom);
             cardTop = mediaCard.top;
         }
 
-        // Media card: previous / play / next on top, -10s / +10s below.
+        // Media card: send-mode chips on top, then previous / play / next, then -10s / +10s.
         float inset = Ui.dp(getContext(), 10);
         float innerLeft = mediaCard.left + inset;
         float innerRight = mediaCard.right - inset;
         float innerTop = mediaCard.top + inset;
         float innerBottom = mediaCard.bottom - inset;
-        float innerH = innerBottom - innerTop;
-        if (innerH < 1f || innerRight <= innerLeft) return;
+        if (innerRight <= innerLeft) return;
+        float captionH = landscape ? 0f : Ui.dp(getContext(), 15f);
+        float chipH = landscape ? Ui.dp(getContext(), 22f) : Ui.dp(getContext(), 26f);
+        float chipGap = Ui.dp(getContext(), 6f);
+        sendCaption.set(innerLeft, innerTop, innerRight, innerTop + captionH);
+        float chipTop = innerTop + captionH;
+        float chipW = (innerRight - innerLeft - chipGap * (SEND_COUNT - 1)) / (float) SEND_COUNT;
+        for (int i = 0; i < SEND_COUNT; i++) {
+            float l = innerLeft + i * (chipW + chipGap);
+            chipAreas[i].set(l, chipTop, l + chipW, chipTop + chipH);
+        }
+        float bodyTop = chipTop + chipH + chipGap;
+        float innerH = innerBottom - bodyTop;
+        if (innerH < 1f) return;
         // Natural heights; landscape stretches them a little but never more than a thumb key.
         float naturalRow1 = Ui.dp(getContext(), 56);
         float naturalRow2 = Ui.dp(getContext(), 44);
@@ -279,7 +334,7 @@ public class MediaView extends View {
             row1H = Math.max(Ui.dp(getContext(), 40), avail * 0.56f);
             row2H = Math.max(Ui.dp(getContext(), 30), avail - row1H);
         }
-        float barTop = innerTop + topOff;
+        float barTop = bodyTop + topOff;
         float cellW = (innerRight - innerLeft - gap * (BAR_COUNT - 1)) / (float) BAR_COUNT;
         for (int i = 0; i < BAR_COUNT; i++) {
             float l = innerLeft + i * (cellW + gap);
@@ -339,6 +394,8 @@ public class MediaView extends View {
         canvas.drawRoundRect(mediaCard, corner, corner, cardPaint);
         canvas.drawRoundRect(keypadCard, corner, corner, cardPaint);
 
+        drawSendChips(canvas);
+
         Paint icon = hid.isConnected() ? iconPaint : iconDimPaint;
         for (int i = 0; i < BAR_COUNT; i++) {
             RectF area = barAreas[i];
@@ -350,7 +407,11 @@ public class MediaView extends View {
             }
             RectF box = new RectF(area);
             box.inset(area.width() * 0.26f, area.height() * 0.26f);
-            Icons.draw(canvas, BAR_ICONS[i], box, icon);
+            if (sendMode != SEND_MEDIA && (i == BAR_PREV || i == BAR_NEXT)) {
+                drawBarChevron(canvas, box, i == BAR_PREV, icon);
+            } else {
+                Icons.draw(canvas, BAR_ICONS[i], box, icon);
+            }
         }
 
         drawSkip(canvas, pillAreas[PILL_BACK], PILL_BACK);
@@ -395,8 +456,120 @@ public class MediaView extends View {
         performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
     }
 
+    /** 上一段 / 下一段到底发什么：媒体键（默认）、方向键、还是 PageUp·PgDn。 */
+    public static void setSendMode(Context context, int mode) {
+        sendMode = (mode < 0 || mode >= SEND_COUNT) ? SEND_MEDIA : mode;
+        prefs(context).edit().putInt(PREF_SEND, sendMode).apply();
+    }
+
+    public static int sendMode(Context context) {
+        return prefs(context).getInt(PREF_SEND, SEND_MEDIA);
+    }
+
+    public int sendMode() {
+        return sendMode;
+    }
+
+    private static SharedPreferences prefs(Context context) {
+        return context.getSharedPreferences("phonekb", Context.MODE_PRIVATE);
+    }
+
+    /** 非媒体键模式下这两颗键发哪个键码。 */
+    private static int sendUsage(int bar) {
+        boolean prev = bar == BAR_PREV;
+        if (sendMode == SEND_ARROW) return prev ? HidConstants.KEY_UP : HidConstants.KEY_DOWN;
+        if (sendMode == SEND_PAGE) return prev ? HidConstants.KEY_PAGE_UP : HidConstants.KEY_PAGE_DOWN;
+        return 0;
+    }
+
     private void tapBar(int index) {
+        // 播放 / 暂停 始终是媒体键；只有上一段 / 下一段跟着「发送什么」走。
+        if (sendMode != SEND_MEDIA && index != 1) {
+            if (HidManager.timingLogging()) {
+                Log.i("PhoneKB-Media", "send bar=" + index + " mode=" + sendMode
+                        + " usage=0x" + Integer.toHexString(sendUsage(index)));
+            }
+            hid.tapKey(0, sendUsage(index));
+            return;
+        }
         hid.tapConsumer(BAR_USAGES[index]);
+    }
+
+    /** 媒体卡顶部那行：说明 + 「媒体键 / 方向键 / PageUp·PgDn」三个小胶囊。 */
+    private void drawSendChips(Canvas canvas) {
+        if (chipAreas[0].isEmpty()) return;
+        boolean connected = hid.isConnected();
+        if (!sendCaption.isEmpty()) {
+            Paint.FontMetrics fm = captionPaint.getFontMetrics();
+            canvas.drawText("上一段 / 下一段发送",
+                    sendCaption.left + Ui.dp(getContext(), 4f),
+                    sendCaption.centerY() - (fm.ascent + fm.descent) / 2f, captionPaint);
+        }
+        float radius = Ui.dp(getContext(), 9);
+        for (int i = 0; i < SEND_COUNT; i++) {
+            RectF chip = chipAreas[i];
+            if (chip.isEmpty()) continue;
+            boolean on = i == sendMode;
+            canvas.drawRoundRect(chip, radius, radius, on ? chipOnBgPaint : chipBgPaint);
+            if (on) canvas.drawRoundRect(chip, radius, radius, chipStrokePaint);
+            Paint tp = on && connected ? chipOnTextPaint : chipOffTextPaint;
+            Paint.FontMetrics fm = tp.getFontMetrics();
+            canvas.drawText(SEND_LABELS[i], chip.centerX(),
+                    chip.centerY() - (fm.ascent + fm.descent) / 2f, tp);
+        }
+    }
+
+    /** 非媒体键模式下 ⏮ ⏭ 位置上的上下箭头 + 底下小字（上一集 / 下一集 或 上一页 / 下一页）。 */
+    private void drawBarChevron(Canvas canvas, RectF box, boolean up, Paint icon) {
+        float cx = box.centerX();
+        float cy = box.centerY() - Ui.dp(getContext(), 3f);
+        float half = Ui.dp(getContext(), 7f);
+        float dy = Ui.dp(getContext(), 4.5f);
+        Paint chev = new Paint(icon);
+        chev.setStyle(Paint.Style.STROKE);
+        chev.setStrokeWidth(Ui.dp(getContext(), 2f));
+        chev.setStrokeCap(Paint.Cap.ROUND);
+        float apex = up ? cy - dy : cy + dy;
+        float arm = up ? cy + dy : cy - dy;
+        canvas.drawLine(cx - half, arm, cx, apex, chev);
+        canvas.drawLine(cx, apex, cx + half, arm, chev);
+        if (barAreas[BAR_PREV].isEmpty()) return;
+        String[] labels = SEND_BAR_LABELS[sendMode];
+        float y = barAreas[up ? BAR_PREV : BAR_NEXT].bottom - Ui.dp(getContext(), 6f);
+        barLabelPaint.setColor(hid.isConnected() ? Ui.TEXT_DIM : Ui.TEXT_DIM);
+        Paint.FontMetrics fm = barLabelPaint.getFontMetrics();
+        canvas.drawText(up ? labels[0] : labels[1], cx, y - fm.descent, barLabelPaint);
+    }
+
+    /**
+     * 调试用（--ei fliptest 1）：把三种「发送什么」轮着试一遍，每种发两下，并用 Toast 报出
+     * 正在试哪一种，方便一眼看出哪个键才能让红果短剧 / 抖音真的翻页。
+     */
+    public void debugCycleSends() {
+        final Context ctx = getContext();
+        final int saved = sendMode;
+        for (int i = 0; i < SEND_COUNT; i++) {
+            final int mode = i;
+            handler.postDelayed(() -> {
+                setSendMode(ctx, mode);
+                invalidate();
+                Toast.makeText(ctx, "正在试：" + SEND_LABELS[mode] + "（看视频有没有翻）",
+                        Toast.LENGTH_SHORT).show();
+                tapBar(BAR_NEXT);
+                handler.postDelayed(() -> tapBar(BAR_NEXT), 900);
+            }, i * 3200L);
+        }
+        handler.postDelayed(() -> {
+            setSendMode(ctx, saved);
+            invalidate();
+            Toast.makeText(ctx, "试完了，已恢复：" + SEND_LABELS[saved], Toast.LENGTH_SHORT).show();
+        }, SEND_COUNT * 3200L);
+    }
+
+    /** 调试用（--ei medmode N）：直接把「发送什么」切成第 N 种，方便截图。 */
+    public void debugSetSendMode(int mode) {
+        setSendMode(getContext(), mode);
+        invalidate();
     }
 
     private void startBarRepeat(int bar) {
@@ -475,6 +648,15 @@ public class MediaView extends View {
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
                     if (touchpadAction != null) touchpadAction.run();
                     invalidate();
+                    return true;
+                }
+                for (int i = 0; i < SEND_COUNT; i++) {
+                    if (!chipAreas[i].contains(x, y)) continue;
+                    if (sendMode != i) {
+                        setSendMode(getContext(), i);
+                        haptic();
+                        invalidate();
+                    }
                     return true;
                 }
                 for (int i = 0; i < PILL_COUNT; i++) {
