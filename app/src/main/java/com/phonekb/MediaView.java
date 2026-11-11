@@ -93,14 +93,22 @@ public class MediaView extends View {
     public static final int SEND_MEDIA = 0;
     public static final int SEND_ARROW = 1;
     public static final int SEND_PAGE = 2;
-    private static final int SEND_COUNT = 3;
+    /** v0.40.5：一次连发一大串滚轮，让「整页视频」列表滚过半屏后自己吸附到下一个。 */
+    public static final int SEND_BURST = 3;
+    private static final int SEND_COUNT = 4;
     private static final String PREF_SEND = "media_send";
-    private static final String[] SEND_LABELS = {"媒体键", "方向键 ↑↓", "PageUp·PgDn"};
+    private static final String PREF_BURST = "media_burst";
+    private static final String[] SEND_LABELS = {"媒体键", "方向键", "PageUp", "滚轮爆发"};
+    /** 滚轮爆发的四档幅度（格）；点「滚轮爆发」胶囊本身可以在四档间轮换。 */
+    public static final int[] BURST_STEPS = {10, 20, 30, 60};
+    private static final int BURST_DEFAULT = 20;
+    private static int burstSteps = BURST_DEFAULT;
     /** 非媒体键模式下，⏮ ⏭ 底下的小字。 */
     private static final String[][] SEND_BAR_LABELS = {
             {"上一首", "下一首"},
             {"上一集", "下一集"},
-            {"上一页", "下一页"}};
+            {"上一页", "下一页"},
+            {"上一屏", "下一屏"}};
     private static int sendMode = SEND_MEDIA;
     private final RectF[] chipAreas = new RectF[SEND_COUNT];
     private final RectF sendCaption = new RectF();
@@ -203,6 +211,7 @@ public class MediaView extends View {
         barLabelPaint.setTextAlign(Paint.Align.CENTER);
         sendMode = prefs(context).getInt(PREF_SEND, SEND_MEDIA);
         if (sendMode < 0 || sendMode >= SEND_COUNT) sendMode = SEND_MEDIA;
+        burstSteps = nearestBurstSteps(prefs(context).getInt(PREF_BURST, BURST_DEFAULT));
 
         buildKeys();
     }
@@ -466,6 +475,39 @@ public class MediaView extends View {
         return prefs(context).getInt(PREF_SEND, SEND_MEDIA);
     }
 
+    /** 滚轮爆发的幅度（格）：10 / 20 / 30 / 60。 */
+    public static void setBurstSteps(Context context, int steps) {
+        burstSteps = nearestBurstSteps(steps);
+        prefs(context).edit().putInt(PREF_BURST, burstSteps).apply();
+    }
+
+    public static int burstSteps(Context context) {
+        return nearestBurstSteps(prefs(context).getInt(PREF_BURST, BURST_DEFAULT));
+    }
+
+    /** 把任意数值夹到最近的合法档位。 */
+    private static int nearestBurstSteps(int steps) {
+        int best = BURST_STEPS[0];
+        int bestGap = Integer.MAX_VALUE;
+        for (int s : BURST_STEPS) {
+            int gap = Math.abs(s - steps);
+            if (gap < bestGap) {
+                bestGap = gap;
+                best = s;
+            }
+        }
+        return best;
+    }
+
+    /** 在四档幅度里轮换（点「滚轮爆发」胶囊本身时用）。 */
+    private static int nextBurstSteps(int steps) {
+        int cur = nearestBurstSteps(steps);
+        for (int i = 0; i < BURST_STEPS.length; i++) {
+            if (BURST_STEPS[i] == cur) return BURST_STEPS[(i + 1) % BURST_STEPS.length];
+        }
+        return BURST_DEFAULT;
+    }
+
     public int sendMode() {
         return sendMode;
     }
@@ -485,6 +527,15 @@ public class MediaView extends View {
     private void tapBar(int index) {
         // 播放 / 暂停 始终是媒体键；只有上一段 / 下一段跟着「发送什么」走。
         if (sendMode != SEND_MEDIA && index != 1) {
+            if (sendMode == SEND_BURST) {
+                // 上一屏 = 向上滚（负），下一屏 = 向下滚（正）
+                int dir = index == BAR_PREV ? -1 : 1;
+                if (HidManager.timingLogging()) {
+                    Log.i("PhoneKB-Media", "send burst bar=" + index + " steps=" + burstSteps);
+                }
+                hid.mouseWheelBurst(dir, burstSteps);
+                return;
+            }
             if (HidManager.timingLogging()) {
                 Log.i("PhoneKB-Media", "send bar=" + index + " mode=" + sendMode
                         + " usage=0x" + Integer.toHexString(sendUsage(index)));
@@ -514,7 +565,8 @@ public class MediaView extends View {
             if (on) canvas.drawRoundRect(chip, radius, radius, chipStrokePaint);
             Paint tp = on && connected ? chipOnTextPaint : chipOffTextPaint;
             Paint.FontMetrics fm = tp.getFontMetrics();
-            canvas.drawText(SEND_LABELS[i], chip.centerX(),
+            String label = i == SEND_BURST ? ("滚轮 " + burstSteps) : SEND_LABELS[i];
+            canvas.drawText(label, chip.centerX(),
                     chip.centerY() - (fm.ascent + fm.descent) / 2f, tp);
         }
     }
@@ -547,28 +599,38 @@ public class MediaView extends View {
      */
     public void debugCycleSends() {
         final Context ctx = getContext();
-        final int saved = sendMode;
-        for (int i = 0; i < SEND_COUNT; i++) {
-            final int mode = i;
+        final int savedMode = sendMode;
+        final int savedSteps = burstSteps;
+        for (int i = 0; i < BURST_STEPS.length; i++) {
+            final int steps = BURST_STEPS[i];
             handler.postDelayed(() -> {
-                setSendMode(ctx, mode);
+                setSendMode(ctx, SEND_BURST);
+                setBurstSteps(ctx, steps);
                 invalidate();
-                Toast.makeText(ctx, "正在试：" + SEND_LABELS[mode] + "（看视频有没有翻）",
+                Toast.makeText(ctx, "正在试：滚轮爆发 " + steps + " 格（看视频有没有翻）",
                         Toast.LENGTH_SHORT).show();
                 tapBar(BAR_NEXT);
-                handler.postDelayed(() -> tapBar(BAR_NEXT), 900);
-            }, i * 3200L);
+                handler.postDelayed(() -> tapBar(BAR_NEXT), 1100);
+            }, i * 3600L);
         }
         handler.postDelayed(() -> {
-            setSendMode(ctx, saved);
+            setSendMode(ctx, savedMode);
+            setBurstSteps(ctx, savedSteps);
             invalidate();
-            Toast.makeText(ctx, "试完了，已恢复：" + SEND_LABELS[saved], Toast.LENGTH_SHORT).show();
-        }, SEND_COUNT * 3200L);
+            Toast.makeText(ctx, "试完了，已恢复：" + SEND_LABELS[savedMode]
+                    + (savedMode == SEND_BURST ? " " + savedSteps + " 格" : ""), Toast.LENGTH_SHORT).show();
+        }, BURST_STEPS.length * 3600L);
     }
 
     /** 调试用（--ei medmode N）：直接把「发送什么」切成第 N 种，方便截图。 */
     public void debugSetSendMode(int mode) {
         setSendMode(getContext(), mode);
+        invalidate();
+    }
+
+    /** 调试用（--ei medburst N）：把滚轮爆发的幅度设成最近的合法档位（10 / 20 / 30 / 60）。 */
+    public void debugSetBurstSteps(int steps) {
+        setBurstSteps(getContext(), steps);
         invalidate();
     }
 
@@ -652,10 +714,23 @@ public class MediaView extends View {
                 }
                 for (int i = 0; i < SEND_COUNT; i++) {
                     if (!chipAreas[i].contains(x, y)) continue;
+                    if (i == SEND_BURST && sendMode == SEND_BURST) {
+                        // 已经在「滚轮爆发」里了：再点一次就是换幅度 10 → 20 → 30 → 60
+                        setBurstSteps(getContext(), nextBurstSteps(burstSteps));
+                        haptic();
+                        invalidate();
+                        Toast.makeText(getContext(), "滚轮爆发 " + burstSteps + " 格",
+                                Toast.LENGTH_SHORT).show();
+                        return true;
+                    }
                     if (sendMode != i) {
                         setSendMode(getContext(), i);
                         haptic();
                         invalidate();
+                        if (i == SEND_BURST) {
+                            Toast.makeText(getContext(), "滚轮爆发 " + burstSteps + " 格（再点一下换幅度）",
+                                    Toast.LENGTH_SHORT).show();
+                        }
                     }
                     return true;
                 }

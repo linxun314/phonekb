@@ -1082,6 +1082,26 @@ public final class HidManager {
         }
     }
 
+    /**
+     * 一次「爆发」滚动（v0.40.5）：把 total 格拆成几个报文（每报文 ≤ 20 格、间隔 16 ms）连续发出去。
+     * 用在红果短剧 / 抖音这种「整页视频、滑动过半就吸附翻页」的列表上——一格一格滚永远到不了一半，
+     * 一次滚过小半屏，列表自己就会吸附到下一个视频。
+     */
+    public void mouseWheelBurst(final int dir, final int total) {
+        if (dir == 0 || total <= 0) return;
+        if (timingLog) Log.i(TAG, "wheel burst dir=" + dir + " total=" + total);
+        int remaining = total;
+        int delay = 0;
+        while (remaining > 0) {
+            final int chunk = Math.min(20, remaining);
+            remaining -= chunk;
+            final int amount = dir > 0 ? chunk : -chunk;
+            if (delay == 0) mouseWheel(amount);
+            else main.postDelayed(() -> mouseWheel(amount), delay);
+            delay += 16;
+        }
+    }
+
     /** Guards {@link #pointerHoldStart(int, int)} against being started twice from a double tap. */
     private boolean pointerHeld;
 
