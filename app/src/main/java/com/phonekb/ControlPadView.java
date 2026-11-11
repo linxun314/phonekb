@@ -89,6 +89,12 @@ public class ControlPadView extends View {
     private final Paint stripStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint stripThumbStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint stripChevPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    // v0.40.6 grab overlay
+    private final Paint grabRingPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint grabChipBgPaint = Ui.fill(Ui.SURFACE_2);
+    private final Paint grabTextPaint;
+    private final Paint osdPaint;
+    private boolean debugGrabOsd;
 
     /** 把 fg 按 alpha 混到 bg 上（都当不透明 RGB），用来拼出 macOS 那种磨砂色阶。 */
     private static int stripBlend(int fg, float a, int bg) {
@@ -239,6 +245,11 @@ public class ControlPadView extends View {
         stripChevPaint.setColor(0x8CFFFFFF);
         gestOnPaint = Ui.text(context, 11, Ui.ACCENT);
         gestOffPaint = Ui.text(context, 11, Ui.TEXT_DIM);
+        grabRingPaint.setStyle(Paint.Style.STROKE);
+        grabRingPaint.setStrokeWidth(Ui.dp(context, 2f));
+        grabRingPaint.setColor(0xFFFFFFFF);
+        grabTextPaint = Ui.text(context, 11, Ui.ACCENT);
+        osdPaint = Ui.text(context, 10, Ui.TEXT_DIM);
         PointerSettings.init(context);
         PadGestures.init(context);
     }
@@ -302,6 +313,12 @@ public class ControlPadView extends View {
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
+        drawAll(canvas);
+        drawGrab(canvas);
+    }
+
+    /** Everything except the grab overlay, which has to stay on top. */
+    private void drawAll(Canvas canvas) {
         canvas.drawColor(Ui.BG);
         Paint icon = hid.isConnected() ? iconPaint : iconDimPaint;
 
@@ -347,6 +364,54 @@ public class ControlPadView extends View {
         Icons.draw(canvas, Icons.BACK, iconBox(backRect), icon);
         Icons.draw(canvas, Icons.HOME, iconBox(homeRect), icon);
         Icons.draw(canvas, Icons.RECENTS, iconBox(recentsRect), icon);
+    }
+
+    /**
+     * v0.40.6 grab overlay: while the long-press grab holds the left button, draw a ring around
+     * the finger plus a 「抓」 chip so the state is visible, not just felt.
+     */
+    private void drawGrab(Canvas canvas) {
+        boolean g = pad != null && pad.grabbing();
+        if (!g && !debugGrabOsd) return;
+        float r = Ui.dp(getContext(), 26);
+        float cx = g ? pad.grabX() : padRect.centerX();
+        float cy = g ? pad.grabY() : padRect.centerY();
+        if (g) {
+            grabRingPaint.setAlpha(0xDD);
+            canvas.drawCircle(cx, cy, r, grabRingPaint);
+            grabRingPaint.setAlpha(0x55);
+            canvas.drawCircle(cx, cy, r * 1.62f, grabRingPaint);
+            grabRingPaint.setAlpha(0xDD);
+            // Chip sits to the right of the ring so it never covers the pad's hint text.
+            float chipW = Ui.dp(getContext(), 40);
+            float chipH = Ui.dp(getContext(), 26);
+            float chipX = Math.min(cx + r * 1.62f + Ui.dp(getContext(), 8), padRect.right - chipW - Ui.dp(getContext(), 10));
+            float chipY = cy - chipH / 2f;
+            RectF chip = new RectF(chipX, chipY, chipX + chipW, chipY + chipH);
+            canvas.drawRoundRect(chip, Ui.dp(getContext(), 9), Ui.dp(getContext(), 9), grabChipBgPaint);
+            Ui.textCenter(canvas, "抓", chip.centerX(), chip.centerY() + Ui.dp(getContext(), 4), grabTextPaint);
+        }
+        if (debugGrabOsd) {
+            String s = (g ? "L:1" : "L:0") + "  travel " + (g ? (int) pad.grabTravel() : 0) + " px"
+                    + "  thr " + PointerSettings.longPressMs() + " ms";
+            // Bottom-right of the pad card: top-left holds the 灵敏度 / 手势 chips, bottom-left is
+            // the 菜单 column in landscape.
+            osdPaint.setTextAlign(Paint.Align.RIGHT);
+            canvas.drawText(s, padRect.right - Ui.dp(getContext(), 14),
+                    padRect.bottom - Ui.dp(getContext(), 14), osdPaint);
+            osdPaint.setTextAlign(Paint.Align.CENTER);
+        }
+    }
+
+    /** Debug (--ei grabosd 1): show the grab state + travel + threshold in the pad card. */
+    public void setDebugGrabOsd(boolean value) {
+        debugGrabOsd = value;
+        invalidate();
+    }
+
+    /** Debug (--ei grabhold 1): fake a long-press grab and hold the left button for 6 s. */
+    public void debugGrabHold() {
+        if (pad != null) pad.debugGrabHold();
     }
 
     /** 「灵敏度 1.0x」 pill in the top-left corner of the trackpad card (touchpad page only). */
