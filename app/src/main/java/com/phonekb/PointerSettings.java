@@ -48,9 +48,9 @@ public final class PointerSettings {
     /** 拖动时每滚动几格震一下；关掉后完全静音（有人觉得震动在加重「卡」的错觉）。 */
     public static final int STRIP_HAPTIC_EVERY = 8;
 
-    public static final int LONG_PRESS_MIN = 200;
+    public static final int LONG_PRESS_MIN = 250;
     public static final int LONG_PRESS_MAX = 600;
-    public static final int LONG_PRESS_DEFAULT = 300;
+    public static final int LONG_PRESS_DEFAULT = 350;
 
     private static final String PREFS = "phonekb";
     private static final String KEY_SPEED = "ptr_speed";

@@ -71,14 +71,6 @@ public final class PadController {
     private boolean scrolled;
     private boolean pressedDown;
     private boolean tapDragging;
-    /**
-     * v0.40.6: true while a long-press "grab" is holding the left button down, so the view can
-     * draw a grab ring and the debug OSD can prove the state instead of relying on feel.
-     */
-    private boolean grabbing;
-    private float grabX;
-    private float grabY;
-    private float grabTravel;
     private boolean gestureUsed;
     private float lastX;
     private float lastY;
@@ -125,17 +117,9 @@ public final class PadController {
             if (mode != MODE_PAD || moved || scrolled || gestureUsed) return;
             mode = MODE_DRAG;
             tapDragging = false;
-            grabbing = true;
-            grabX = downX;
-            grabY = downY;
-            grabTravel = 0f;
             hid.mouseButtons(MOUSE_LEFT);
             pressedDown = true;
-            // v0.40.6: the grab must always be felt. The old haptic() short-circuits in 极速模式,
-            // which is on by default — that is exactly why a long press "had no feel" at all.
-            hapticForce();
-            Log.i(TAG, "grab press: left button down at " + (int) downX + "," + (int) downY);
-            view.invalidate();
+            haptic();
         }
     };
 
@@ -534,11 +518,6 @@ public final class PadController {
                         hid.mouseButtons(0);
                         mode = MODE_NONE;
                     }
-                    if (grabbing) {
-                        grabbing = false;
-                        Log.i(TAG, "grab release: travel=" + (int) grabTravel + "px");
-                        view.invalidate();
-                    }
                     pressedDown = false;
                     recordTap(downX, downY);
                     releaseModifiers();
@@ -594,12 +573,6 @@ public final class PadController {
         lastX = x;
         lastY = y;
         moved = true;
-        if (grabbing) {
-            grabTravel += (float) Math.hypot(x - grabX, y - grabY);
-            grabX = x;
-            grabY = y;
-            view.invalidate();
-        }
     }
 
     /** Two fingers: pinch / horizontal swipe / horizontal scroll / vertical scroll. */
@@ -740,59 +713,6 @@ public final class PadController {
         }
     }
 
-    /** True while the long-press grab is holding the left button (drawn as a ring + 抓 chip). */
-    public boolean grabbing() {
-        return grabbing;
-    }
-
-    public float grabX() {
-        return grabX;
-    }
-
-    public float grabY() {
-        return grabY;
-    }
-
-    /** Finger travel since the grab started, in view pixels (debug OSD). */
-    public float grabTravel() {
-        return grabTravel;
-    }
-
-    /**
-     * v0.40.6: a grab has to be felt. haptic() is silenced by 极速模式 (on by default), so the
-     * grab uses a long-press tick that always fires.
-     */
-    private void hapticForce() {
-        if (view != null) view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
-    }
-
-    /**
-     * Debug hook (--ei grabhold 1): fake a grab in the middle of the pad and hold the left button
-     * for a few seconds, so a screenshot (and logcat) can show the grabbed state. MIUI refuses
-     * "adb shell input", so the real gesture cannot be scripted.
-     */
-    public void debugGrabHold() {
-        cancel();
-        mode = MODE_DRAG;
-        grabbing = true;
-        grabX = bounds.centerX();
-        grabY = bounds.centerY();
-        grabTravel = 0f;
-        pressedDown = true;
-        hid.mouseButtons(MOUSE_LEFT);
-        hapticForce();
-        Log.i(TAG, "debug grab hold: left button down");
-        view.invalidate();
-        handler.postDelayed(() -> {
-            grabbing = false;
-            hid.mouseButtons(0);
-            pressedDown = false;
-            mode = MODE_NONE;
-            view.invalidate();
-            Log.i(TAG, "debug grab hold: released");
-        }, 6000);
-    }
-
     public void cancel() {
         handler.removeCallbacks(beginDrag);
         stopFling();
@@ -800,7 +720,6 @@ public final class PadController {
         releaseModifiers();
         pressedDown = false;
         tapDragging = false;
-        grabbing = false;
         mode = MODE_NONE;
         twoGesture = TWO_UNDECIDED;
         gestureUsed = false;
