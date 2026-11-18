@@ -86,6 +86,14 @@ public final class HidManager {
      */
     private final Object pendingLock = new Object();
     private final java.util.HashMap<Integer, byte[]> pendingReports = new java.util.HashMap<>();
+    /**
+     * Keyboard and consumer payloads carry edges (down / up), so coalescing them is wrong: a fast
+     * tap queues "down" and "up" within a few ms and newest-wins used to swallow the down report,
+     * so the host never saw the key at all (v0.41 "点击不灵敏"). Edges keep their order in a small
+     * FIFO; mouse and gamepad frames still coalesce because only their newest state matters.
+     */
+    private final java.util.ArrayDeque<EdgeReport> edgeReports = new java.util.ArrayDeque<>();
+    private static final int EDGE_QUEUE_MAX = 64;
     private boolean flushQueued;
     private long lastGamepadSentAt;
     private int lastGamepadButtons = -1;
@@ -401,8 +409,24 @@ public final class HidManager {
         }
     }
 
+    /**
+     * Two owners call {@link #start()} — MainActivity and {@link KeepAliveService} — and both can
+     * get here before the asynchronous {@code onAppStatusChanged(true)} lands. A second
+     * registerApp() makes the framework drop the first registration ("HID 注册被系统回收"),
+     * which then cascades into a retry storm ("注册被拒绝"). Throttle the request instead.
+     */
+    private static final long REGISTER_DEDUPE_MS = 1_000L;
+    private long registerRequestedAt;
+
     private void registerApp() {
         if (hid == null) return;
+        if (appRegistered) return;
+        long now = SystemClock.uptimeMillis();
+        if (registerRequestedAt != 0L && now - registerRequestedAt < REGISTER_DEDUPE_MS) {
+            Log.i(TAG, "registerApp skipped: requested " + (now - registerRequestedAt) + "ms ago");
+            return;
+        }
+        registerRequestedAt = now;
         try {
             BluetoothHidDeviceAppSdpSettings sdp = new BluetoothHidDeviceAppSdpSettings(
                     "PhoneKB", "Phone as Bluetooth keyboard", "PhoneKB",
@@ -847,14 +871,20 @@ public final class HidManager {
             return true;
         }
         synchronized (pendingLock) {
-            pendingReports.put(reportId, data);
+            if (reportId == HidConstants.REPORT_KEYBOARD || reportId == HidConstants.REPORT_CONSUMER) {
+                while (edgeReports.size() >= EDGE_QUEUE_MAX) edgeReports.pollFirst();
+                edgeReports.addLast(new EdgeReport(reportId, data));
+            } else {
+                pendingReports.put(reportId, data);
+            }
             if (!flushQueued) {
                 flushQueued = true;
                 sendExecutor.execute(this::flushPending);
             }
         }
         if (timingLog) {
-            Log.i("PhoneKB-HID", "submit id=" + reportId + " t=" + submitAt + " mask=" + maskOf(data));
+            Log.i("PhoneKB-HID", "submit id=" + reportId + " t=" + submitAt + " mask=" + maskOf(data)
+                    + payloadOf(reportId, data));
         }
         long now = SystemClock.uptimeMillis();
         if (DEBUG && now - lastSendLogAt > 1000) {
@@ -864,8 +894,20 @@ public final class HidManager {
         return true;
     }
 
+    /** One queued keyboard / consumer payload; edges must be delivered in the order they happened. */
+    private static final class EdgeReport {
+        final int id;
+        final byte[] data;
+
+        EdgeReport(int id, byte[] data) {
+            this.id = id;
+            this.data = data;
+        }
+    }
+
     /**
-     * Drains {@link #pendingReports}, newest state first, retrying a failed hand-off a few times.
+     * Drains {@link #edgeReports} in order and {@link #pendingReports} newest state first, retrying
+     * a failed hand-off a few times.
      * A dropped report used to mean a lost button press; retrying (and letting a newer state replace
      * an older one) keeps taps reliable without piling up a queue.
      */
@@ -876,16 +918,22 @@ public final class HidManager {
             int reportId;
             byte[] data;
             synchronized (pendingLock) {
-                if (pendingReports.isEmpty()) {
-                    flushQueued = false;
-                    return;
-                }
-                if (pendingReports.containsKey(HidConstants.REPORT_GAMEPAD)) {
-                    reportId = HidConstants.REPORT_GAMEPAD;
+                EdgeReport edge = edgeReports.pollFirst();
+                if (edge != null) {
+                    reportId = edge.id;
+                    data = edge.data;
                 } else {
-                    reportId = pendingReports.keySet().iterator().next();
+                    if (pendingReports.isEmpty()) {
+                        flushQueued = false;
+                        return;
+                    }
+                    if (pendingReports.containsKey(HidConstants.REPORT_GAMEPAD)) {
+                        reportId = HidConstants.REPORT_GAMEPAD;
+                    } else {
+                        reportId = pendingReports.keySet().iterator().next();
+                    }
+                    data = pendingReports.remove(reportId);
                 }
-                data = pendingReports.remove(reportId);
             }
             if (reportId == HidConstants.REPORT_GAMEPAD) {
                 // Button/hat edges go out immediately; only pure stick movement is rate limited,
@@ -927,9 +975,21 @@ public final class HidManager {
             if (!ok) dropCount++;
             if (timingLog) {
                 Log.i("PhoneKB-HID", "sent id=" + reportId + " t=" + System.currentTimeMillis()
-                        + " ok=" + ok + " mask=" + maskOf(data));
+                        + " ok=" + ok + " mask=" + maskOf(data) + payloadOf(reportId, data));
             }
         }
+    }
+
+    /** Keyboard payloads are only two bytes, so their content (mods, usage) is logged instead. */
+    private static String payloadOf(int reportId, byte[] data) {
+        if (data == null) return "";
+        if (reportId == HidConstants.REPORT_KEYBOARD && data.length >= 2) {
+            return " key=" + (data[0] & 0xFF) + "," + (data[1] & 0xFF);
+        }
+        if (reportId == HidConstants.REPORT_CONSUMER && data.length >= 2) {
+            return " csm=" + (data[0] & 0xFF) + "," + (data[1] & 0xFF);
+        }
+        return "";
     }
 
     private static String maskOf(byte[] data) {

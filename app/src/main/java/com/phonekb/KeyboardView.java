@@ -6,6 +6,8 @@ import android.graphics.Paint;
 import android.graphics.RectF;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
+import android.util.Log;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
@@ -38,6 +40,10 @@ public class KeyboardView extends View {
     private static final int TYPE_CHIP = 2;
     private static final int TYPE_ACTION = 3;
     private static final int TYPE_SYM = 4;
+
+    private static final String TAG = "PhoneKB-KB";
+    /** Same key pressed twice inside this window is treated as one press (finger tremor / double tap). */
+    private static final long KEY_DEBOUNCE_MS = 30;
     private static final int TYPE_PAGE = 5;
     private static final int TYPE_TOGGLE = 6;
     private static final int TYPE_LABEL = 7;
@@ -95,9 +101,15 @@ public class KeyboardView extends View {
     private final float toolbarH;
     private final float toolbarRadius;
 
+    /** Touch tolerance: a press survives the finger wobbling this far outside the key rect. */
+    private final float slop;
     private int latchMods;
     private Key activeKey;
     private Key flashChip;
+    /** Debug: --ei keylog 1 logs every hit / move-out / release with coordinates (tag PhoneKB-KB). */
+    private boolean keyLog;
+    private int lastUsage = -1;
+    private long lastKeyAt;
     /** PC mode swaps the shortcut chip row for Windows shortcuts (Win / Win+D / Win+Shift+S ...). */
     private boolean pcMode;
 
@@ -119,6 +131,7 @@ public class KeyboardView extends View {
         chipH = Ui.dp(context, 40);
         toolbarH = Ui.dp(context, 44);
         toolbarRadius = Ui.dp(context, 10);
+        slop = Ui.dp(context, 9);
         labelPaint = Ui.text(context, 17, Ui.TEXT);
         chipLabelPaint = Ui.text(context, 11, Ui.TEXT_DIM);
         chipFlashLabelPaint = Ui.text(context, 11, Ui.BG);
@@ -613,11 +626,76 @@ public class KeyboardView extends View {
         paint.setTextSize(size);
     }
 
+    /**
+     * Exact hit first, then the nearest key within {@link #slop}. Keys are separated by a 5 dp gap
+     * and thumbs regularly land in it; without the fallback that tap simply did nothing.
+     */
     private Key hit(float x, float y) {
         for (Key k : toolbar) if (k.rect.contains(x, y)) return k;
         for (Key k : chips) if (k.rect.contains(x, y)) return k;
         for (Key k : keys) if (k.rect.contains(x, y)) return k;
-        return null;
+        float best = slop;
+        Key bestKey = null;
+        for (Key k : keys) {
+            float dx = Math.max(Math.max(k.rect.left - x, x - k.rect.right), 0f);
+            float dy = Math.max(Math.max(k.rect.top - y, y - k.rect.bottom), 0f);
+            float distance = (float) Math.hypot(dx, dy);
+            if (distance <= best) {
+                best = distance;
+                bestKey = k;
+            }
+        }
+        return bestKey;
+    }
+
+    /** True once the finger is further than {@link #slop} outside the key rect. */
+    private boolean outsideSlop(RectF r, float x, float y) {
+        return x < r.left - slop || x > r.right + slop || y < r.top - slop || y > r.bottom + slop;
+    }
+
+    private static String describe(Key k) {
+        return k.label.isEmpty() ? ("action#" + k.type) : k.label;
+    }
+
+    /** Debug only: --ei keylog 1 turns on hit / move / release logging (tag PhoneKB-KB). */
+    public void setKeyLog(boolean on) {
+        keyLog = on;
+    }
+
+    /**
+     * Debug only: presses the widest key, wobbles 6 dp outside its right edge (inside the 9 dp slop)
+     * and releases. With the slop in place the log shows "hit" … "release" and no "move-out"; the
+     * pre-v0.41 build released the key the moment the finger left the rect.
+     */
+    public void debugSlopTest() {
+        Key widest = null;
+        for (Key k : keys) {
+            if (widest == null || k.rect.width() > widest.rect.width()) widest = k;
+        }
+        if (widest == null || widest.rect.width() <= 0) {
+            Log.i(TAG, "slop test skipped: no keys laid out yet");
+            return;
+        }
+        final float cx = widest.rect.centerX();
+        final float cy = widest.rect.centerY();
+        final float wobbleX = widest.rect.right + Ui.dp(getContext(), 6);
+        long t = SystemClock.uptimeMillis();
+        inject(MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, cx, cy, 0));
+        inject(MotionEvent.obtain(t, t + 30, MotionEvent.ACTION_MOVE, wobbleX, cy, 0));
+        inject(MotionEvent.obtain(t, t + 60, MotionEvent.ACTION_UP, wobbleX, cy, 0));
+        Log.i(TAG, "slop test key=" + describe(widest) + " rectRight=" + Math.round(widest.rect.right)
+                + " wobbleX=" + Math.round(wobbleX));
+        // Second phase: press straight into the gap under that key (no rect contains the point).
+        final float gapY = widest.rect.bottom + gap * 0.5f;
+        long t2 = SystemClock.uptimeMillis();
+        inject(MotionEvent.obtain(t2, t2, MotionEvent.ACTION_DOWN, cx, gapY, 0));
+        inject(MotionEvent.obtain(t2, t2 + 40, MotionEvent.ACTION_UP, cx, gapY, 0));
+        Log.i(TAG, "gap test at y=" + Math.round(gapY) + " (key bottom=" + Math.round(widest.rect.bottom) + ")");
+    }
+
+    private void inject(MotionEvent e) {
+        dispatchTouchEvent(e);
+        e.recycle();
     }
 
     @Override
@@ -625,7 +703,18 @@ public class KeyboardView extends View {
         switch (e.getActionMasked()) {
             case MotionEvent.ACTION_DOWN: {
                 Key k = hit(e.getX(), e.getY());
-                if (k == null) return true;
+                if (k == null) {
+                    if (keyLog) {
+                        Log.i(TAG, "miss x=" + Math.round(e.getX()) + " y=" + Math.round(e.getY()));
+                    }
+                    return true;
+                }
+                if (keyLog) {
+                    Log.i(TAG, "hit " + describe(k) + " type=" + k.type + " usage=" + k.usage
+                            + " x=" + Math.round(e.getX()) + " y=" + Math.round(e.getY())
+                            + " rect=" + Math.round(k.rect.left) + "," + Math.round(k.rect.top)
+                            + "," + Math.round(k.rect.right) + "," + Math.round(k.rect.bottom));
+                }
                 performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
                 switch (k.type) {
                     case TYPE_TOGGLE:
@@ -664,17 +753,33 @@ public class KeyboardView extends View {
                         return true;
                     case TYPE_SYM:
                     case TYPE_KEY:
-                    default:
+                    default: {
+                        long now = SystemClock.uptimeMillis();
+                        if (k.usage == lastUsage && now - lastKeyAt < KEY_DEBOUNCE_MS) {
+                            if (keyLog) Log.i(TAG, "debounced " + describe(k));
+                            return true;
+                        }
+                        lastUsage = k.usage;
+                        lastKeyAt = now;
                         activeKey = k;
                         int mods = k.type == TYPE_SYM ? (latchMods | k.chipMods) : latchMods;
                         hid.keyboardPress(mods, k.usage);
                         latchMods = 0;
                         invalidate();
                         return true;
+                    }
                 }
             }
             case MotionEvent.ACTION_MOVE: {
-                if (activeKey != null && !activeKey.rect.contains(e.getX(), e.getY())) {
+                if (activeKey != null && outsideSlop(activeKey.rect, e.getX(), e.getY())) {
+                    if (keyLog) {
+                        Log.i(TAG, "move-out " + describe(activeKey)
+                                + " x=" + Math.round(e.getX()) + " y=" + Math.round(e.getY())
+                                + " rect=" + Math.round(activeKey.rect.left) + ","
+                                + Math.round(activeKey.rect.top) + ","
+                                + Math.round(activeKey.rect.right) + ","
+                                + Math.round(activeKey.rect.bottom));
+                    }
                     releaseKey();
                 }
                 return true;
@@ -691,6 +796,10 @@ public class KeyboardView extends View {
 
     private void releaseKey() {
         if (activeKey == null) return;
+        if (keyLog) {
+            Log.i(TAG, "release " + describe(activeKey) + " held="
+                    + (SystemClock.uptimeMillis() - lastKeyAt) + "ms");
+        }
         activeKey = null;
         hid.keyboardRelease();
         invalidate();

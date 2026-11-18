@@ -290,7 +290,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         footer = new TextView(this);
-        footer.setText("PhoneKB v0.40.7 · 蓝牙 HID · 平板 / 电脑 · 键盘 / 触控板 / 媒体 / 手柄");
+        footer.setText("PhoneKB v0.41.0 · 蓝牙 HID · 平板 / 电脑 · 键盘 / 触控板 / 媒体 / 手柄");
         footer.setTextColor(Ui.TEXT_DIM);
         footer.setTextSize(11);
         footer.setGravity(Gravity.CENTER);
@@ -1333,6 +1333,7 @@ public class MainActivity extends Activity {
                         + "键盘：字母、数字和符号直接发到平板。键盘顶部有一行大工具栏：左边「切换布局」在手机布局和电脑布局之间来回切（会记住上次的选择），右边「触控板」键弹出触控板浮层（大触控区 + 右侧 ↑↓ 滚动 + 底部 返回/主页/后台），不用切页面就能移动指针和点击。\n\n"
                         + "手机布局：和普通手机键盘一样（数字行 1-0、qwerty、Shift / ⌫、Space / Enter），左下「符号」进入符号页，符号页左下「ABC」返回字母；数字行也可以用来选中文输入法的候选词。\n\n"
                         + "电脑布局：顶部一排快捷键 Ctrl+C / Ctrl+V / Ctrl+X / Ctrl+A / Alt+Tab，下面带 Tab、方向键和 Ctrl / Alt / Win，适合敲命令、远程桌面和组合键。\n\n"
+                + "按键容差（v0.41.0）：手指落在两颗键中间的缝隙里也能点中（9 dp 内自动找最近的键），按住时手指轻微抖动不会把这一下取消；快按连点现在每一下都会真的发出去（v0.41.0 之前偶发「点了没反应」）。\n\n"
                         + "指针灵敏度：触控板页触控卡片左上角的「灵敏度 1.0x」胶囊可以打开设置——指针速度 0.4x–2.5x（1.0x 就是以前的手感）、加速度（快扫自动加速）、滚轮速度（一次滑动滚几行）、上下键按住滚动（慢 = 一格一格挪）、滚轮条灵敏度与抬手惯性；改完对触控板页、触控板浮层、手柄页触控区同时生效，并且会记住。\n\n"
                         + "触控板手势（v0.39.0）：单指点击=左键，双指点击=右键，双指上下滑=滚动（甩一下还会惯性继续滑）；刚点完再按住就能拖着走（点按拖动），松手后左键还按着、下次点击才放下（拖拽锁定，选文字和拖文件很好用）；手指推到触控区边缘会继续加速（边缘续推）；手掌贴屏幕不会乱跳（误触抑制）。平板模式下：双指右滑=返回，三指下滑=主页，三指上滑 / 左右滑=多任务。电脑模式下：双指横滑=横向滚动，双指右滑=后退、左滑=前进，三指上=任务视图、下=显示桌面、左右=切窗口，四指左右=切换虚拟桌面，捏合=Ctrl+滚轮缩放。每一项都在「帮助 → 更多设置 → 触控板手势」里单独开关，触控区左上角还有一颗「手势 开 / 关」胶囊可以一键全关。\n\n"
                         + "触控板：单指滑动移动指针，单指点击=左键，双指点击=右键，双指上下滑=滚动；右侧是一条 macOS 风格的滚动条（磨砂胶囊轨道 + 一根 30 dp 白滑块带三条细纹 + 上下小箭头）：点一下箭头或轨道空白就滚一格（滑块留在中间不动），按住不动连续慢滚；只有手指按在那根白滑块上才是「抓住」，不抬手上下拖就是跟手的鼠标滚轮，滑块会跟着手指走、变白变大，而且抓起滑块那一下上下键完全不响应、箭头也不会亮（v0.40.2；在指针灵敏度里能调条子灵敏度 / 抬手惯性 / 顺滑度 / 震动）；左侧「数字」弹出数字键盘（输入密码），「键盘」弹出简易手机键盘（带数字行，数字也可用来选输入法的候选词），「菜单」等于平板菜单键。底部那一排是三颗键：返回 / 主页 / 后台（中键已经删掉——平板根本不认鼠标中键）。\n\n"
@@ -2272,10 +2273,41 @@ public class MainActivity extends Activity {
         // Debug/test hook: emit a fixed gamepad sequence so the host input events can be captured
         // with "adb shell getevent" (adb cannot tap the on-screen gamepad).
         if (intent.getIntExtra("hidlog", 0) == 1) HidManager.setTimingLog(true);
+        // Debug/test hook: press a key, wobble inside the 9 dp slop, release — proves slop works.
+        if (intent.getIntExtra("kbslop", 0) == 1) {
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                if (keyboardView != null && currentTab == TAB_KEYBOARD) keyboardView.debugSlopTest();
+                else Log.i("PhoneKB-KB", "slop test skipped: keyboard page not visible");
+            }, 2000);
+        }
+        // Debug/test hook: log every keyboard hit / move-out / release with coordinates and hold time
+        // so "点了没出字" and "按 A 出 B" can be told apart from a real logcat trace.
+        if (intent.getIntExtra("keylog", 0) == 1) {
+            if (keyboardView != null) keyboardView.setKeyLog(true);
+            if (thumbKeyboard != null) thumbKeyboard.setKeyLog(true);
+            if (overlayKeyboard != null) overlayKeyboard.setKeyLog(true);
+        }
         if (intent.getIntExtra("hidlegacy", 0) == 1) HidManager.setLegacySend(true);
         int gpTest = intent.getIntExtra("gptest", 0);
         if (gpTest > 0) {
             new Thread(() -> runGamepadSelfTest(gpTest), "gamepad-self-test").start();
+        }
+        // Debug/test hook: N fast keyboard taps (down, 8 ms, up) so logcat can prove that every
+        // keyboard edge reaches the host (before v0.41 newest-wins swallowed the down report).
+        int kbTest = intent.getIntExtra("kbtest", 0);
+        if (kbTest > 0) {
+            new Thread(() -> {
+                HidManager manager = hid;
+                if (manager == null) return;
+                sleepQuietly(1200);
+                for (int i = 0; i < kbTest; i++) {
+                    Log.i("PhoneKB-KB", "kbtest tap " + i);
+                    manager.keyboardPress(0, HidConstants.KEY_A);
+                    sleepQuietly(8);
+                    manager.keyboardRelease();
+                    sleepQuietly(150);
+                }
+            }, "keyboard-self-test").start();
         }
         // Debug/test hook: fire the brightness consumer usages so the host can capture them
         // with "adb shell getevent" (adb cannot tap the on-screen brightness keys).
