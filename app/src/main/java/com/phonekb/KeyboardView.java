@@ -27,6 +27,8 @@ public class KeyboardView extends View {
 
     public static final int LAYOUT_COMPUTER = 0;
     public static final int LAYOUT_PHONE = 1;
+    /** Phone layout with a 3×4 pinyin T9 pad: touch a pad, its letters pop out, slide to pick. */
+    public static final int LAYOUT_PHONE_T9 = 2;
 
     public static final int PAGE_LETTERS = 0;
     public static final int PAGE_SYMBOLS = 1;
@@ -55,15 +57,26 @@ public class KeyboardView extends View {
         final int modBit;
         final int chipMods;
         final float weight;
+        /** T9 pads only: the letters behind this digit ("abc", "pqrs" …); null elsewhere. */
+        final String letters;
+        /** T9 pads only: the digit usage sent when the pad is held down. */
+        final int digitUsage;
         final RectF rect = new RectF();
 
         Key(String label, int type, int usage, int modBit, int chipMods, float weight) {
+            this(label, type, usage, modBit, chipMods, weight, null, 0);
+        }
+
+        Key(String label, int type, int usage, int modBit, int chipMods, float weight,
+                String letters, int digitUsage) {
             this.label = label;
             this.type = type;
             this.usage = usage;
             this.modBit = modBit;
             this.chipMods = chipMods;
             this.weight = weight;
+            this.letters = letters;
+            this.digitUsage = digitUsage;
         }
     }
 
@@ -101,6 +114,8 @@ public class KeyboardView extends View {
     private final float toolbarH;
     private final float toolbarRadius;
 
+    /** T9 stays open this long before a held pad turns into its digit. */
+    private static final long T9_LONG_MS = 420;
     /** Touch tolerance: a press survives the finger wobbling this far outside the key rect. */
     private final float slop;
     private int latchMods;
@@ -112,6 +127,20 @@ public class KeyboardView extends View {
     private long lastKeyAt;
     /** PC mode swaps the shortcut chip row for Windows shortcuts (Win / Win+D / Win+Shift+S ...). */
     private boolean pcMode;
+
+    // ---- pinyin 9-key (T9) pad -------------------------------------------------
+    private Key t9Key;
+    private String t9Letters;
+    private int t9Index;
+    private float t9StartX;
+    private boolean t9DigitFired;
+    private final RectF t9Popup = new RectF();
+    private final List<RectF> t9Cells = new ArrayList<>();
+    private Paint t9PanelPaint;
+    private Paint t9PickPaint;
+    private Paint t9StrokePaint;
+    /** Holding a T9 pad sends its digit instead of a letter (so digits stay reachable). */
+    private final Runnable t9LongPress;
 
     public KeyboardView(Context context, HidManager hid) {
         this(context, hid, false);
@@ -142,6 +171,21 @@ public class KeyboardView extends View {
         actionChipStrokePaint.setStyle(Paint.Style.STROKE);
         actionChipStrokePaint.setColor(Ui.ACCENT);
         actionChipStrokePaint.setStrokeWidth(Ui.dp(context, 1.5f));
+        t9PanelPaint = Ui.fill(Ui.SURFACE_2);
+        t9PickPaint = Ui.fill(Ui.ACCENT);
+        t9StrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        t9StrokePaint.setStyle(Paint.Style.STROKE);
+        t9StrokePaint.setColor(Ui.ACCENT);
+        t9StrokePaint.setStrokeWidth(Ui.dp(context, 1.2f));
+        t9LongPress = () -> {
+            if (t9Key == null) return;
+            t9DigitFired = true;
+            lastUsage = t9Key.digitUsage;
+            lastKeyAt = SystemClock.uptimeMillis();
+            hid.tapKey(0, t9Key.digitUsage);
+            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+            if (keyLog) Log.i(TAG, "t9 digit usage=" + t9Key.digitUsage);
+        };
         buildKeys();
     }
 
@@ -155,10 +199,18 @@ public class KeyboardView extends View {
     }
 
     public void setLayout(int newLayout) {
-        layout = newLayout == LAYOUT_COMPUTER ? LAYOUT_COMPUTER : LAYOUT_PHONE;
+        layout = newLayout == LAYOUT_COMPUTER || newLayout == LAYOUT_PHONE_T9
+                ? newLayout : LAYOUT_PHONE;
         page = PAGE_LETTERS;
         buildKeys();
         invalidate();
+    }
+
+    /** Toolbar 「切换布局」 cycles 手机 26 键 → 手机九键 → 电脑布局. */
+    public static int nextLayout(int current) {
+        if (current == LAYOUT_PHONE) return LAYOUT_PHONE_T9;
+        if (current == LAYOUT_PHONE_T9) return LAYOUT_COMPUTER;
+        return LAYOUT_PHONE;
     }
 
     public int getLayout() {
@@ -177,7 +229,7 @@ public class KeyboardView extends View {
     }
 
     public void setPage(int newPage) {
-        page = newPage == PAGE_SYMBOLS && layout == LAYOUT_PHONE ? PAGE_SYMBOLS : PAGE_LETTERS;
+        page = newPage == PAGE_SYMBOLS && layout != LAYOUT_COMPUTER ? PAGE_SYMBOLS : PAGE_LETTERS;
         buildKeys();
         invalidate();
     }
@@ -222,6 +274,17 @@ public class KeyboardView extends View {
         return k;
     }
 
+    /** T9 pad: carries its letters and the digit usage, {@code usage} itself is unused. */
+    private Key t9(String label, String letters, int digitUsage, float weight) {
+        Key k = new Key(label, TYPE_KEY, 0, 0, 0, weight, letters, digitUsage);
+        keys.add(k);
+        return k;
+    }
+
+    private Key t9(String label, String letters, int digitUsage) {
+        return t9(label, letters, digitUsage, 1f);
+    }
+
     private void chip(String label, int mods, int usage) {
         chips.add(new Key(label, TYPE_CHIP, usage, 0, mods, 1f));
     }
@@ -241,6 +304,7 @@ public class KeyboardView extends View {
         if (simple) buildSimpleKeys();
         else if (layout == LAYOUT_COMPUTER) buildComputerKeys();
         else if (page == PAGE_SYMBOLS) buildSymbolKeys();
+        else if (layout == LAYOUT_PHONE_T9) buildT9Keys();
         else buildPhoneKeys();
         layoutAll();
     }
@@ -372,6 +436,38 @@ public class KeyboardView extends View {
         row(1.05f, r4);
     }
 
+    /**
+     * Pinyin 9-key pad (3×4): tap a pad and its letters pop out above your thumb; slide to the
+     * letter you want and lift. Letters go out as plain HID key codes, so the tablet's own IME
+     * still does the pinyin → 汉字 work. Holding a pad sends that digit instead.
+     */
+    private void buildT9Keys() {
+        List<Key> r0 = new ArrayList<>();
+        r0.add(key("1", HidConstants.KEY_1));
+        r0.add(t9("2", "abc", HidConstants.KEY_2));
+        r0.add(t9("3", "def", HidConstants.KEY_3));
+        row(1f, r0);
+
+        List<Key> r1 = new ArrayList<>();
+        r1.add(t9("4", "ghi", HidConstants.KEY_4));
+        r1.add(t9("5", "jkl", HidConstants.KEY_5));
+        r1.add(t9("6", "mno", HidConstants.KEY_6));
+        row(1f, r1);
+
+        List<Key> r2 = new ArrayList<>();
+        r2.add(t9("7", "pqrs", HidConstants.KEY_7));
+        r2.add(t9("8", "tuv", HidConstants.KEY_8));
+        r2.add(t9("9", "wxyz", HidConstants.KEY_9));
+        row(1f, r2);
+
+        List<Key> r3 = new ArrayList<>();
+        r3.add(pageKey("符号", PAGE_SYMBOLS, 1.15f));
+        r3.add(key("空格", HidConstants.KEY_SPACE, 2.5f));
+        r3.add(key("⌫", HidConstants.KEY_BACKSPACE, 1.25f));
+        r3.add(key("Enter", HidConstants.KEY_ENTER, 1.5f));
+        row(1f, r3);
+    }
+
     /** Symbols page of the phone layout. */
     private void buildSymbolKeys() {
         int s = HidConstants.MOD_LEFT_SHIFT;
@@ -475,7 +571,8 @@ public class KeyboardView extends View {
     }
 
     private String layoutLabel() {
-        return layout == LAYOUT_COMPUTER ? "电脑布局" : "手机布局";
+        if (layout == LAYOUT_COMPUTER) return "电脑布局";
+        return layout == LAYOUT_PHONE_T9 ? "手机九键" : "手机布局";
     }
 
     @Override
@@ -606,6 +703,14 @@ public class KeyboardView extends View {
             boolean pressed = k == activeKey;
             Paint fill = latched ? modPaint : (pressed ? keyDownPaint : keyPaint);
             canvas.drawRoundRect(k.rect, radius, radius, fill);
+            if (k.letters != null) {
+                float lift = Ui.dp(getContext(), 9);
+                drawFitted(canvas, k.label, k.rect.centerX(), k.rect.centerY() - lift,
+                        labelPaint, k.rect.width() - Ui.dp(getContext(), 8));
+                drawFitted(canvas, k.letters, k.rect.centerX(), k.rect.centerY() + lift,
+                        chipLabelPaint, k.rect.width() - Ui.dp(getContext(), 8));
+                continue;
+            }
             Paint text = latched ? darkLabelPaint : labelPaint;
             int len = k.label.length();
             if (len == 2) labelPaint.setTextSize(Ui.dp(getContext(), 15));
@@ -614,6 +719,98 @@ public class KeyboardView extends View {
             Ui.textCenter(canvas, k.label, k.rect.centerX(), k.rect.centerY(), text);
             if (text != labelPaint) text.setTextSize(darkBase);
             labelPaint.setTextSize(baseSize);
+        }
+        drawT9Popup(canvas);
+    }
+
+    /** Letter strip that pops above the T9 pad; the picked letter is highlighted. */
+    private void drawT9Popup(Canvas canvas) {
+        if (t9Key == null || t9Cells.isEmpty()) return;
+        float r = radius * 1.4f;
+        canvas.drawRoundRect(t9Popup, r, r, t9PanelPaint);
+        canvas.drawRoundRect(t9Popup, r, r, t9StrokePaint);
+        for (int i = 0; i < t9Cells.size(); i++) {
+            RectF c = t9Cells.get(i);
+            boolean pick = i == t9Index;
+            canvas.drawRoundRect(c, radius, radius, pick ? t9PickPaint : keyPaint);
+            drawFitted(canvas, String.valueOf(t9Letters.charAt(i)), c.centerX(), c.centerY(),
+                    pick ? darkLabelPaint : labelPaint, c.width() - Ui.dp(getContext(), 2));
+        }
+    }
+
+    /** Opens the letter strip above {@code k}; the first letter is preselected. */
+    private void showT9Popup(Key k) {
+        t9Letters = k.letters;
+        t9Cells.clear();
+        float cellW = Ui.dp(getContext(), 38);
+        float cellH = Ui.dp(getContext(), 44);
+        float cg = Ui.dp(getContext(), 4);
+        int n = t9Letters.length();
+        float totalW = n * cellW + (n - 1) * cg;
+        float left = k.rect.centerX() - totalW / 2f;
+        left = Math.max(pad, Math.min(left, getWidth() - pad - totalW));
+        // Centred on the pressed pad: the thumb owns that row anyway, and it never covers the
+        // row of pads below (which stays fully visible while picking).
+        float top = k.rect.centerY() - cellH / 2f;
+        top = Math.max(pad, Math.min(top, getHeight() - pad - cellH));
+        t9Popup.set(left, top, left + totalW, top + cellH);
+        for (int i = 0; i < n; i++) {
+            float cx = left + i * (cellW + cg);
+            t9Cells.add(new RectF(cx, top, cx + cellW, top + cellH));
+        }
+        t9Index = 0;
+    }
+
+    /** Sliding right moves the highlight through the pad's letters; no slide keeps the first. */
+    private void t9pick(float x) {
+        if (t9Cells.isEmpty()) return;
+        float step = t9Cells.get(0).width() + (t9Cells.size() > 1
+                ? t9Cells.get(1).left - t9Cells.get(0).right : 0f);
+        int idx = Math.round((x - t9StartX) / step);
+        idx = Math.max(0, Math.min(t9Cells.size() - 1, idx));
+        if (idx != t9Index) {
+            t9Index = idx;
+            if (keyLog) Log.i(TAG, "t9 pick " + t9Letters.charAt(t9Index));
+            invalidate();
+        }
+    }
+
+    private void beginT9(Key k, float x) {
+        t9Key = k;
+        t9DigitFired = false;
+        t9StartX = x;
+        activeKey = k;
+        showT9Popup(k);
+        handler.removeCallbacks(t9LongPress);
+        handler.postDelayed(t9LongPress, T9_LONG_MS);
+        if (keyLog) Log.i(TAG, "t9 pad " + k.label + " letters=" + k.letters);
+        invalidate();
+    }
+
+    /** Sends the picked letter (or nothing when the digit already went out on long press). */
+    private void endT9() {
+        handler.removeCallbacks(t9LongPress);
+        Key k = t9Key;
+        String letters = t9Letters;
+        int idx = t9Index;
+        boolean digit = t9DigitFired;
+        t9Key = null;
+        t9Letters = null;
+        t9DigitFired = false;
+        t9Cells.clear();
+        t9Index = 0;
+        activeKey = null;
+        invalidate();
+        if (k == null || letters == null || letters.isEmpty()) return;
+        if (digit) return;
+        int usage = HidConstants.KEY_A + (letters.charAt(idx) - 'a');
+        int mods = latchMods;
+        latchMods = 0;
+        lastUsage = usage;
+        lastKeyAt = SystemClock.uptimeMillis();
+        hid.tapKey(mods, usage);
+        if (keyLog) {
+            Log.i(TAG, "t9 letter " + letters.charAt(idx) + " usage=" + usage + " mods=" + mods);
         }
     }
 
@@ -693,6 +890,47 @@ public class KeyboardView extends View {
         Log.i(TAG, "gap test at y=" + Math.round(gapY) + " (key bottom=" + Math.round(widest.rect.bottom) + ")");
     }
 
+    /** Debug only (--ei t9pop 1): opens the letter strip of "7 pqrs" so a screenshot can show it. */
+    public void debugShowT9Popup() {
+        for (Key k : keys) {
+            if (k.letters != null) {
+                t9Key = k;
+                showT9Popup(k);
+                t9Index = 1;
+                invalidate();
+                Log.i(TAG, "t9 popup shown for pad " + k.label + " letters=" + k.letters);
+                return;
+            }
+        }
+        Log.i(TAG, "t9 popup skipped: no T9 pads (layout=" + layout + ")");
+    }
+
+    /**
+     * Debug only (--ei t9test 1): presses the "7 pqrs" pad, slides right one cell and lifts, so the
+     * log shows "t9 pad 7 …" → "t9 pick q" → "t9 letter q usage=20".
+     */
+    public void debugT9Test() {
+        Key pad = null;
+        for (Key k : keys) {
+            if (k.letters != null && "7".equals(k.label)) pad = k;
+        }
+        if (pad == null) {
+            for (Key k : keys) if (k.letters != null) { pad = k; break; }
+        }
+        if (pad == null || pad.rect.width() <= 0) {
+            Log.i(TAG, "t9 test skipped: no T9 pads (layout=" + layout + ")");
+            return;
+        }
+        final float cx = pad.rect.centerX();
+        final float cy = pad.rect.centerY();
+        final float step = Ui.dp(getContext(), 42);
+        long t = SystemClock.uptimeMillis();
+        inject(MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, cx, cy, 0));
+        inject(MotionEvent.obtain(t, t + 40, MotionEvent.ACTION_MOVE, cx + step, cy, 0));
+        inject(MotionEvent.obtain(t, t + 80, MotionEvent.ACTION_UP, cx + step, cy, 0));
+        Log.i(TAG, "t9 test pad=" + pad.label + " stepX=" + Math.round(step));
+    }
+
     private void inject(MotionEvent e) {
         dispatchTouchEvent(e);
         e.recycle();
@@ -718,7 +956,7 @@ public class KeyboardView extends View {
                 performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
                 switch (k.type) {
                     case TYPE_TOGGLE:
-                        layout = layout == LAYOUT_COMPUTER ? LAYOUT_PHONE : LAYOUT_COMPUTER;
+                        layout = nextLayout(layout);
                         page = PAGE_LETTERS;
                         rebuild();
                         if (layoutListener != null) layoutListener.onLayoutChanged(layout);
@@ -754,6 +992,10 @@ public class KeyboardView extends View {
                     case TYPE_SYM:
                     case TYPE_KEY:
                     default: {
+                        if (k.type == TYPE_KEY && k.letters != null && layout == LAYOUT_PHONE_T9) {
+                            beginT9(k, e.getX());
+                            return true;
+                        }
                         long now = SystemClock.uptimeMillis();
                         if (k.usage == lastUsage && now - lastKeyAt < KEY_DEBOUNCE_MS) {
                             if (keyLog) Log.i(TAG, "debounced " + describe(k));
@@ -771,6 +1013,11 @@ public class KeyboardView extends View {
                 }
             }
             case MotionEvent.ACTION_MOVE: {
+                if (t9Key != null) {
+                    t9pick(e.getX());
+                    if (Math.abs(e.getX() - t9StartX) > slop) handler.removeCallbacks(t9LongPress);
+                    return true;
+                }
                 if (activeKey != null && outsideSlop(activeKey.rect, e.getX(), e.getY())) {
                     if (keyLog) {
                         Log.i(TAG, "move-out " + describe(activeKey)
@@ -786,6 +1033,10 @@ public class KeyboardView extends View {
             }
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL: {
+                if (t9Key != null) {
+                    endT9();
+                    return true;
+                }
                 releaseKey();
                 return true;
             }

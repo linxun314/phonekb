@@ -10,8 +10,8 @@ android {
         applicationId 'com.phonekb'
         minSdk 28
         targetSdk 36
-        versionCode 82
-        versionName '0.41.0'
+        versionCode 83
+        versionName '0.42.0'
     }
 
     buildTypes {

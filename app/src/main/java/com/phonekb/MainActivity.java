@@ -290,7 +290,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         footer = new TextView(this);
-        footer.setText("PhoneKB v0.41.0 · 蓝牙 HID · 平板 / 电脑 · 键盘 / 触控板 / 媒体 / 手柄");
+        footer.setText("PhoneKB v0.42.0 · 蓝牙 HID · 平板 / 电脑 · 键盘 / 触控板 / 媒体 / 手柄");
         footer.setTextColor(Ui.TEXT_DIM);
         footer.setTextSize(11);
         footer.setGravity(Gravity.CENTER);
@@ -655,7 +655,9 @@ public class MainActivity extends Activity {
         keyboardView.setLayout(prefs.getInt("kb_layout", KeyboardView.LAYOUT_PHONE));
         keyboardView.setListener(layout -> {
             prefs.edit().putInt("kb_layout", layout).apply();
-            toast(layout == KeyboardView.LAYOUT_PHONE ? "已切换到手机布局" : "已切换到电脑布局");
+            toast(layout == KeyboardView.LAYOUT_COMPUTER ? "已切换到电脑布局"
+                    : layout == KeyboardView.LAYOUT_PHONE_T9 ? "已切换到手机九键（拼音）"
+                    : "已切换到手机布局（26 键）");
         });
         keyboardView.setTouchpadAction(() -> toggleOverlay(OVERLAY_TOUCHPAD));
         keyboardView.setPcMode(pcMode);
@@ -1161,7 +1163,7 @@ public class MainActivity extends Activity {
         if (changed) prefs.edit().putInt("device_mode", enabled ? 1 : 0).apply();
         if (keyboardView != null) {
             keyboardView.setPcMode(enabled);
-            if (enabled && keyboardView.getLayout() == KeyboardView.LAYOUT_PHONE) {
+            if (enabled && keyboardView.getLayout() != KeyboardView.LAYOUT_COMPUTER) {
                 // Windows needs Ctrl / Alt / Win, which only the PC-style layout carries.
                 keyboardView.setLayout(KeyboardView.LAYOUT_COMPUTER);
             }
@@ -1334,6 +1336,7 @@ public class MainActivity extends Activity {
                         + "手机布局：和普通手机键盘一样（数字行 1-0、qwerty、Shift / ⌫、Space / Enter），左下「符号」进入符号页，符号页左下「ABC」返回字母；数字行也可以用来选中文输入法的候选词。\n\n"
                         + "电脑布局：顶部一排快捷键 Ctrl+C / Ctrl+V / Ctrl+X / Ctrl+A / Alt+Tab，下面带 Tab、方向键和 Ctrl / Alt / Win，适合敲命令、远程桌面和组合键。\n\n"
                 + "按键容差（v0.41.0）：手指落在两颗键中间的缝隙里也能点中（9 dp 内自动找最近的键），按住时手指轻微抖动不会把这一下取消；快按连点现在每一下都会真的发出去（v0.41.0 之前偶发「点了没反应」）。\n\n"
+                + "手机九键（v0.42.0）：「切换布局」按钮现在循环三档 —— 手机布局（26 键）→ 手机九键（3×4 宫格）→ 电脑布局，选过的档位会记住。九键里点一下数字格（2 abc / 3 def …），上面会弹出这格的所有字母，手指往右滑到你要的那个、抬手就发出去（不滑就是第一个字母）；数字格按住不放会直接发这一格对应的数字，所以打数字不用切页。九键发出去的仍然是普通字母键码，拼音转汉字还是由平板自己的输入法完成。\n\n"
                         + "指针灵敏度：触控板页触控卡片左上角的「灵敏度 1.0x」胶囊可以打开设置——指针速度 0.4x–2.5x（1.0x 就是以前的手感）、加速度（快扫自动加速）、滚轮速度（一次滑动滚几行）、上下键按住滚动（慢 = 一格一格挪）、滚轮条灵敏度与抬手惯性；改完对触控板页、触控板浮层、手柄页触控区同时生效，并且会记住。\n\n"
                         + "触控板手势（v0.39.0）：单指点击=左键，双指点击=右键，双指上下滑=滚动（甩一下还会惯性继续滑）；刚点完再按住就能拖着走（点按拖动），松手后左键还按着、下次点击才放下（拖拽锁定，选文字和拖文件很好用）；手指推到触控区边缘会继续加速（边缘续推）；手掌贴屏幕不会乱跳（误触抑制）。平板模式下：双指右滑=返回，三指下滑=主页，三指上滑 / 左右滑=多任务。电脑模式下：双指横滑=横向滚动，双指右滑=后退、左滑=前进，三指上=任务视图、下=显示桌面、左右=切窗口，四指左右=切换虚拟桌面，捏合=Ctrl+滚轮缩放。每一项都在「帮助 → 更多设置 → 触控板手势」里单独开关，触控区左上角还有一颗「手势 开 / 关」胶囊可以一键全关。\n\n"
                         + "触控板：单指滑动移动指针，单指点击=左键，双指点击=右键，双指上下滑=滚动；右侧是一条 macOS 风格的滚动条（磨砂胶囊轨道 + 一根 30 dp 白滑块带三条细纹 + 上下小箭头）：点一下箭头或轨道空白就滚一格（滑块留在中间不动），按住不动连续慢滚；只有手指按在那根白滑块上才是「抓住」，不抬手上下拖就是跟手的鼠标滚轮，滑块会跟着手指走、变白变大，而且抓起滑块那一下上下键完全不响应、箭头也不会亮（v0.40.2；在指针灵敏度里能调条子灵敏度 / 抬手惯性 / 顺滑度 / 震动）；左侧「数字」弹出数字键盘（输入密码），「键盘」弹出简易手机键盘（带数字行，数字也可用来选输入法的候选词），「菜单」等于平板菜单键。底部那一排是三颗键：返回 / 主页 / 后台（中键已经删掉——平板根本不认鼠标中键）。\n\n"
@@ -2286,6 +2289,20 @@ public class MainActivity extends Activity {
             if (keyboardView != null) keyboardView.setKeyLog(true);
             if (thumbKeyboard != null) thumbKeyboard.setKeyLog(true);
             if (overlayKeyboard != null) overlayKeyboard.setKeyLog(true);
+        }
+        // Debug/test hook: show the 9-key letter strip for a screenshot (--ei t9pop 1), or walk the
+        // whole path "press pad 7 → slide one cell → lift" so logcat proves the letter went out.
+        if (intent.getIntExtra("t9pop", 0) == 1) {
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                if (keyboardView != null && currentTab == TAB_KEYBOARD) keyboardView.debugShowT9Popup();
+                else Log.i("PhoneKB-KB", "t9 popup skipped: keyboard page not visible");
+            }, 2000);
+        }
+        if (intent.getIntExtra("t9test", 0) == 1) {
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                if (keyboardView != null && currentTab == TAB_KEYBOARD) keyboardView.debugT9Test();
+                else Log.i("PhoneKB-KB", "t9 test skipped: keyboard page not visible");
+            }, 2000);
         }
         if (intent.getIntExtra("hidlegacy", 0) == 1) HidManager.setLegacySend(true);
         int gpTest = intent.getIntExtra("gptest", 0);
